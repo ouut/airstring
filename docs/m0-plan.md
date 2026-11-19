@@ -34,15 +34,15 @@
 - **门**：桌面与手机浏览器各完整打一局（含 --More--、菜单、方向提问、文本输入），录制流完整。
 
 ### S6 Firebase 接线＋Cloud Run 验真 worker
-- **前置（用户动手）**：用户在其 Google 账号下建 Cloud/Firebase 项目并开通 Blaze＋预算告警；主线届时给逐步清单。此前本步只做可部署物与本地桩联调，不挡 S1–S5。
+- **前置（用户动手）**：~~用户在其 Google 账号下建 Cloud/Firebase 项目~~ **已完成（2026-11-19）**：Firebase 项目 `airstring-nethack` 已开通。S6 届时还需在项目内启用 Hosting/Auth/Firestore/Storage/Cloud Run 并复核 Blaze＋预算告警（主线给清单）；此前本步只做可部署物与本地桩联调，不挡 S1–S5。
 - 接线：Hosting 部署、Auth（Google 登录）、Firestore（账号/榜单/元数据，按局终汇总写入）、Storage（按键流/存档/归档包）。
 - 验真 worker：容器化 Node＋同一 wasm 产物，Cloud Run 部署；收到归档包后无头重放、逐回合比帧哈希、回写验真结论与轨迹库索引/标签。
 
 ## M0 关期验收（主线执行）
 规格 §10 M0 六条逐条核：真人局（内测者）→ 按键流完整落盘与自动归档 → 验真 worker 自动回放逐字节通过 → 入轨迹库索引且标签正确 → fleck 侧取该局完成一次差分消费 → 移动端基础版＋跨设备续玩走通。
 
-## 用户待办（仅两件，均不挡 S1–S5）
-1. S6 前：建 Google Cloud/Firebase 项目（主线给清单，约十分钟点击）。
+## 用户待办（均不挡 S1–S5）
+1. ~~S6 前：建 Google Cloud/Firebase 项目~~ **已完成（2026-11-19，项目 `airstring-nethack`）**；S6 时按主线清单在项目内启用各服务并复核 Blaze＋预算告警。
 2. M1 前：airstring.org 的 DNS 指向（注册商在用户手里）。
 
 ## 风险与回退

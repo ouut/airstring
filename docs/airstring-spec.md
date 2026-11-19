@@ -265,7 +265,8 @@ airstring.org 是公开可玩的 web 版 NetHack，承担两项职能，按优�
 - **Firestore**：账号、榜单、局元数据与索引（免费额度：1 GiB、5 万读/日、2 万写/日；写入须按局终汇总与分块上传设计，不得逐回合写库）。
 - **Cloud Storage**：按键流、存档与归档包（均为 KB 级文件）。
 - **Cloud Run**：验真 worker 与接力分叉回放（无头运行同一 wasm 产物；免费额度 18 万 vCPU 秒/月＋200 万请求/月，量级可免费验数千局/月）。
-- **计费形态**：用 Blaze（按量）档——Cloud Storage 与 Cloud Run 只对 Blaze 开放，Blaze 保留全部免费额度、超额才计费；挂预算告警封顶。本站量级预期月费 **$0**；唯一现实超额项是招募爆量日的 Hosting 带宽（超额 $0.15/GB，一千新访客量级约几毛钱），前端须做 wasm 包缓存以压重复下载。
+- **计费形态**：用 Blaze（按量）档——Cloud Storage 与 Cloud Run 只对 Blaze 开放，Blaze 保留全部免费额度、超额才计费；挂预算告警封顶。本站量级预期月费 **$0**；唯一现实超额项是招募爆量日的 Hosting 带宽（超额 $0.15/GB，一千新访客量级约几毛钱），前端须做 wasm 包缓存以压重复下载。**费用纪律（用户 2026-11-19 口径）：尽量只用免费额度**——设计与实现不得默认依赖超额消费，任何会产生持续超额的用法先报用户。
+- **项目（2026-11-19 已开通）**：Firebase 项目 **`airstring-nethack`**（console.firebase.google.com/project/airstring-nethack），由用户本人在其 Google 账号下创建。S6 接线时在项目内启用 Hosting/Auth/Firestore/Storage/Cloud Run 并复核 Blaze 与预算告警状态。
 
 **过渡形态（备选，默认不启用）**：若 WASM 路线评估不过、被迫先行服务端模式，游戏会话层（常驻进程＋pty，免费栈无处安放）临时落一台**独立公网 VPS**（2 vCPU / 4 GB 内存 / 40 GB 磁盘起步；明确不用 tailnet 内的 friends-vm、friends-vm1、ARM 机——那些是内网协作与证据机器，不对公网暴露）；账号、榜单、归档等其余组件可直接先落 Firebase。切 WASM 后 VPS 退役。域名 airstring.org：HTTPS 全站强制，WebSocket（过渡形态）走 wss。**2026-11-19 用户已拍板 M0 走 WASM 一步到位，本过渡形态不启用、仅留作备选。**
 
