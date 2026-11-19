@@ -44,7 +44,7 @@ Your apps → Web（`</>`）→ 注册 “airstring web” → 把给出的
 ## 2. 部署规则与索引
 
 ```sh
-firebase deploy --only firestore:rules,firestore:indexes,storage:rules
+firebase deploy --only firestore:rules,firestore:indexes,storage
 ```
 
 部署后到控制台 Rules 页确认两份规则已生效（版本时间应为本次）。

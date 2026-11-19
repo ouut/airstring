@@ -28,7 +28,7 @@
 在仓根目录执行：
 
 ```sh
-firebase deploy --only firestore:rules,firestore:indexes,storage:rules --project airstring-nethack
+firebase deploy --only firestore:rules,firestore:indexes,storage --project airstring-nethack
 ```
 
 验收：命令成功退出；到 Firebase 控制台 Firestore → Rules 与 Storage → Rules
@@ -67,7 +67,7 @@ gcloud projects add-iam-policy-binding airstring-nethack --member="serviceAccoun
 ```
 
 验收：`gcloud run services describe airstring-verifier --region us-central1
---project airstring-nethack` 能取到服务 URL；`curl <服务URL>/healthz`
+--project airstring-nethack` 能取到服务 URL；`curl <服务URL>/health`（Cloud Run 前端保留 *z 路径，/healthz 到不了容器）
 返回 `{"ok":true}`。**服务 URL 必须写入交付报告**（后续接线要用）。
 
 ## 第四段：上线冒烟（逐项执行并记录结果）

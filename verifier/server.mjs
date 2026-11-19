@@ -74,7 +74,10 @@ async function recordingFromRequest(req) {
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
-  if (req.method === 'GET' && url.pathname === '/healthz')
+  // /health is the production health path: Cloud Run's front end
+  // reserves *z paths (/healthz never reaches the container there).
+  // /healthz is kept for local use.
+  if (req.method === 'GET' && (url.pathname === '/health' || url.pathname === '/healthz'))
     return send(res, 200, { ok: true });
   if (req.method !== 'POST' || url.pathname !== '/verify')
     return send(res, 404, { error: 'not-found' });
