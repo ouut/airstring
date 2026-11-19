@@ -217,3 +217,27 @@ by this addendum.
     ready to wrap in a Blob for download or upload.
 - Save files only need to be self-consistent within the wasm
   build; they are not part of the cross-build byte contract.
+
+## S5 addendum (2026-11-19, mainline ruling: contract corrected to measured behaviour)
+
+The S5 frontend measured four points where the live build differs
+from the contract text above. The frontend adapted to the measured
+behaviour without changing game semantics or any judgement
+criterion; the corrections below are now the contract of record
+for S6 and later work.
+
+1. **No `status` events are emitted by the current build** (zero in
+   the G1/G2 event files and in every S5 session;
+   `shim_status_update` is registered but the BL_FLUSH path never
+   fires). Until that changes, hosts render the status lines from
+   the streamed frame's `[hero]` fields; a `status` event, if one
+   ever arrives, takes precedence.
+2. **Direction questions arrive as prompt events**
+   (`{kind:'yn', choices:null, q:"In what direction?"}`), not as
+   ordinary key consumption. Hosts classify a prompt whose text
+   contains "direction" as a direction prompt.
+3. **Pressing `?` at an item prompt does not open a menu event**:
+   the list is printed as messages followed by a more prompt. Real
+   menu events come from commands such as `i` (how=0).
+4. **Map event `colors` are always 8** in every sampled event;
+   glyph characters alone carry the information hosts need.

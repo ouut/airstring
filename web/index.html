@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>airstring · NetHack</title>
+<link rel="stylesheet" href="./airstring.css">
+</head>
+<body>
+<header id="topbar">
+  <span class="logo">airstring</span>
+  <span class="tag">NetHack 3.6.7 · 种子对局 · 全程可验真</span>
+</header>
+
+<!-- ============ setup screen ============ -->
+<main id="setup">
+  <h1>开局</h1>
+  <p class="notice">为保证成绩可验真，本站对局的游戏内日期固定（与 fleck 护照一致），
+     月相恒定，与真实日期无关；每局使用独立环境、不投放 bones 文件；
+     wizard / explore 模式不开放。</p>
+
+  <form id="setup-form" autocomplete="off">
+    <fieldset>
+      <legend>种子</legend>
+      <label class="radio">
+        <input type="radio" name="seedmode" value="given" checked>
+        指定种子
+        <input id="seed-input" type="text" inputmode="numeric"
+               placeholder="输入种子（0 – 2^64-1）" value="42">
+      </label>
+      <label class="radio">
+        <input type="radio" name="seedmode" value="random">
+        随机种子（系统抽取，开局不可见，局终揭晓）
+      </label>
+      <div id="seed-locked" class="seedline" hidden></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>角色</legend>
+      <label>名字
+        <input id="opt-name" type="text" value="fleck" maxlength="24"
+               pattern="[A-Za-z0-9_\-]+">
+      </label>
+      <label>职业
+        <select id="opt-role"></select>
+      </label>
+      <label>种族
+        <select id="opt-race"></select>
+      </label>
+      <label>性别
+        <select id="opt-gender">
+          <option value="female">女</option>
+          <option value="male">男</option>
+        </select>
+      </label>
+      <label>阵营
+        <select id="opt-align"></select>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>续玩（导入存档）</legend>
+      <p class="hint">选择此前导出的存档文件，开局将自动恢复该局。
+         存档与开局名字绑定，请保持名字一致。</p>
+      <input id="import-file" type="file">
+      <span id="import-info" class="hint"></span>
+    </fieldset>
+
+    <button id="start-btn" type="submit">开始游戏</button>
+  </form>
+</main>
+
+<!-- ============ game screen ============ -->
+<main id="game" hidden>
+  <div id="seed-banner" class="seedline"></div>
+  <div id="msg" aria-live="polite"></div>
+  <div id="grid" role="img" aria-label="地图"></div>
+  <div id="status"></div>
+
+  <div id="overlay" hidden>
+    <div id="overlay-title"></div>
+    <div id="overlay-body"></div>
+    <div id="overlay-actions"></div>
+  </div>
+
+  <div id="linebar" hidden>
+    <span id="line-q"></span>
+    <input id="line-input" type="text" autocomplete="off"
+           autocapitalize="none" spellcheck="false">
+    <button id="line-send" type="button">提交</button>
+    <button id="line-cancel" type="button">取消</button>
+  </div>
+
+  <div id="actionbar"></div>
+
+  <div id="panel" hidden>
+    <div class="panel-head">
+      <input id="panel-search" type="search" placeholder="搜索全部命令…">
+      <button id="panel-close" type="button">关闭</button>
+    </div>
+    <div id="panel-list"></div>
+  </div>
+
+  <details id="msglog-wrap">
+    <summary>消息历史</summary>
+    <div id="msglog"></div>
+  </details>
+
+  <div id="game-tools">
+    <button id="btn-commands" type="button">全部命令</button>
+    <button id="btn-export-rec" type="button">下载录制流</button>
+    <span id="saves-box"></span>
+    <button id="btn-newgame" type="button">回开局页</button>
+  </div>
+  <div id="gameover" hidden></div>
+</main>
+
+<footer id="foot">airstring M0 · 录制只认按键流，点按均翻译为原按键序列</footer>
+<script type="module" src="./airstring.js"></script>
+</body>
+</html>
