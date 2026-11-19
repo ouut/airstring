@@ -130,6 +130,33 @@ try {
           keysTotal: info.keysTotal,
           createdAt: fsMod.serverTimestamp(),
         });
+        /* Auto-trigger verification (M0 closing item): ask the
+         * Cloud Run verifier to replay this recording now,
+         * authenticated with the player's ID token (the worker
+         * binds the token uid to the recording path). Best
+         * effort: any failure leaves the doc 'pending' and
+         * never affects the finished game. */
+        try {
+          const vurl = globalThis.AIRSTRING_VERIFIER_URL;
+          if (vurl) {
+            const token = await user.getIdToken();
+            const resp = await fetch(vurl + '/verify', {
+              method: 'POST',
+              headers: {
+                'content-type': 'application/json',
+                'authorization': 'Bearer ' + token,
+              },
+              body: JSON.stringify({
+                storagePath: 'recordings/' + user.uid + '/' +
+                  info.gameId + '.jsonl',
+              }),
+            });
+            console.info('[airstring] verify trigger:', resp.status);
+          }
+        } catch (e) {
+          console.warn('[airstring] verify trigger failed:',
+            e && e.message || e);
+        }
       },
     };
     renderAuthBox();

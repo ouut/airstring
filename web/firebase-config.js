@@ -19,3 +19,10 @@ globalThis.AIRSTRING_FIREBASE_CONFIG = {
   appId: '1:39704157599:web:26fb071acd56ed5e42f1aa',
   measurementId: 'G-XKFXWLSHS6',
 };
+
+/* Cloud Run verification worker (deployed 2026-11-19). The
+ * frontend calls POST <verifierUrl>/verify with the player's ID
+ * token after finalizing a game, so verification starts without
+ * any manual trigger. Not a secret; the worker checks the token. */
+globalThis.AIRSTRING_VERIFIER_URL =
+  'https://airstring-verifier-39704157599.us-central1.run.app';

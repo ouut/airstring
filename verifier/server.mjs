@@ -13,7 +13,16 @@
 //     response: the verdict object (see verify.mjs), plus
 //       "idempotent": true when the verdict came from the store
 //       instead of a fresh replay.
-//   GET /healthz -> {"ok": true}
+//   GET /health -> {"ok": true}   (/healthz kept for local use;
+//     Cloud Run's front end reserves *z paths in production)
+//
+// Auth (optional): with VERIFIER_REQUIRE_AUTH=1, POST /verify
+// requires an `Authorization: Bearer <Firebase ID token>` header.
+// The token is validated against Google's tokeninfo endpoint
+// (aud + iss pinned to FIREBASE_PROJECT); for storagePath
+// requests the token's uid must own the recording path. This
+// keeps strangers from spending replay compute; the verdict
+// itself never trusts the caller either way.
 //
 // Environment:
 //   PORT             listen port (Cloud Run injects it; def. 8080)
@@ -23,6 +32,7 @@
 //   VERDICT_FILE     file store path (default ./.verdicts.json)
 //   FIREBASE_PROJECT Firestore/Storage project (firestore store)
 //   STORAGE_BUCKET   default bucket for storagePath requests
+//   VERIFIER_REQUIRE_AUTH  '1' to require a Firebase ID token
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,7 +53,23 @@ function send(res, code, obj) {
   res.end(body);
 }
 
-async function recordingFromRequest(req) {
+const REQUIRE_AUTH = process.env.VERIFIER_REQUIRE_AUTH === '1';
+const PROJECT = process.env.FIREBASE_PROJECT || '';
+
+async function checkIdToken(token) {
+  try {
+    const r = await fetch('https://oauth2.googleapis.com/tokeninfo' +
+      '?id_token=' + encodeURIComponent(token));
+    if (!r.ok) return null;
+    const info = await r.json();
+    if (!PROJECT || info.aud !== PROJECT) return null;
+    if (info.iss !== 'https://securetoken.google.com/' + PROJECT)
+      return null;
+    return info; /* info.sub is the caller's uid */
+  } catch (e) { return null; }
+}
+
+async function readBody(req) {
   const chunks = [];
   let size = 0;
   for await (const c of req) {
@@ -51,7 +77,10 @@ async function recordingFromRequest(req) {
     if (size > MAX_BODY) throw new Error('body-too-large');
     chunks.push(c);
   }
-  const body = Buffer.concat(chunks).toString('utf8');
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+function parseEnvelope(body) {
   // Envelope detection: a JSON envelope is a SINGLE JSON value
   // carrying recording/storagePath. A JSONL recording also starts
   // with '{' (every line does), so only a successful whole-body
@@ -60,15 +89,24 @@ async function recordingFromRequest(req) {
   try {
     const payload = JSON.parse(body);
     if (payload && typeof payload === 'object' &&
-        typeof payload.recording === 'string')
+        (typeof payload.recording === 'string' ||
+         typeof payload.storagePath === 'string'))
+      return payload;
+  } catch (e) { /* not a single JSON value: it is JSONL text */ }
+  return null;
+}
+
+async function recordingFromBody(body) {
+  const payload = parseEnvelope(body);
+  if (payload) {
+    if (typeof payload.recording === 'string')
       return payload.recording;
-    if (payload && typeof payload === 'object' &&
-        typeof payload.storagePath === 'string') {
+    if (typeof payload.storagePath === 'string') {
       const { fetchStorageObject } = await import('./gcp.mjs');
       return await fetchStorageObject(payload.storagePath,
         payload.bucket);
     }
-  } catch (e) { /* not a single JSON value: it is JSONL text */ }
+  }
   return body;
 }
 
@@ -81,9 +119,27 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, { ok: true });
   if (req.method !== 'POST' || url.pathname !== '/verify')
     return send(res, 404, { error: 'not-found' });
+  let body;
+  try {
+    body = await readBody(req);
+  } catch (e) {
+    return send(res, 400, { error: String(e.message || e) });
+  }
+  if (REQUIRE_AUTH) {
+    const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
+    const info = m && await checkIdToken(m[1]);
+    if (!info) return send(res, 401, { error: 'unauthorized' });
+    const payload = parseEnvelope(body);
+    if (payload && typeof payload.storagePath === 'string') {
+      // Bind caller to their own recordings: recordings/<uid>/...
+      const seg = payload.storagePath.split('/');
+      if (seg[0] !== 'recordings' || seg[1] !== info.sub)
+        return send(res, 403, { error: 'forbidden' });
+    }
+  }
   let text;
   try {
-    text = await recordingFromRequest(req);
+    text = await recordingFromBody(body);
   } catch (e) {
     return send(res, 400, { error: String(e.message || e) });
   }
