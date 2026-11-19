@@ -36,7 +36,7 @@ LFLAGS+=-s ALLOW_MEMORY_GROWTH=1
 LFLAGS+=-s STACK_SIZE=1048576
 LFLAGS+=-s EXPORTED_RUNTIME_METHODS='["ENV","FS","callMain"]'
 LFLAGS+=--embed-file ../wasm-data@/
-LFLAGS+=--pre-js ../../pre-spike.js
+LFLAGS+=--pre-js ../../tools/pre-s2.js
 
 WINSRC = ../win/stub/winstub.c
 WINOBJ = winstub.o
