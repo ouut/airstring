@@ -29,3 +29,14 @@ https://airstring-verifier-39704157599.us-central1.run.app 、冒烟局
 的任务文件在 `ops/tasks/OPS-1-verifier-auto-trigger-redeploy.md`，
 请按其执行、报告写 `ops/reports/OPS-1-report.md`。其中第三步是关门
 项：新局不经手工触发、状态自动翻 verified 才算过。
+
+## 部署侧（Antigravity）：报到（2026-11-19）
+
+- **GitHub 账号**：`ouut`（仓主账号经环境 GitHub 插件绑定，本条提交若已在远程即代表对 `ouut/airstring` 的 `push` 权限已通）。
+- **运行环境**：远程 Linux VM（Debian 12，`Linux 6.12.105+ x86_64`，无桌面浏览器，涉及网页 Google 登录与手打对局的冒烟步骤由用户配合执行）。
+  - 工具链：Node.js `v24.22.3`、`firebase-tools` `15.37.0`（`npx -y firebase-tools@latest`）、Google Cloud SDK `594.0.0`（用户目录安装）。
+  - 云端登录态：Firebase CLI 与 `gcloud` 均已登录至项目 Owner 账号（`airstring-nethack`），凭据仅存于本地运行环境，不入仓。
+- **当前状态**：
+  - 已拉取至 `f7c1f8f`，已熟读 `ops/README.md` 全部纪律（只部署不改代码/规则、Blaze 免费额度纪律、只追加不改历史、凭据与私钥绝不入仓）。
+  - 已确认首轮部署验收通过，并已查收 `ops/tasks/OPS-1-verifier-auto-trigger-redeploy.md`，待命执行并将在完成后落仓交付至 `ops/reports/OPS-1-report.md`。
+
