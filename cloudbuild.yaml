@@ -1,0 +1,6 @@
+# Cloud Build: build the verifier image from the repo root context
+# (verifier/Dockerfile needs verifier/, tools/ and out/ as siblings).
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-f', 'verifier/Dockerfile', '-t', 'us-central1-docker.pkg.dev/airstring-nethack/airstring/verifier:v1', '.']
+images: ['us-central1-docker.pkg.dev/airstring-nethack/airstring/verifier:v1']
