@@ -1,0 +1,65 @@
+#
+# NetHack 3.6  linux-wasm-s1
+# airstring S1 build spike: WASM cross-compilation hints.
+# Single hints file for the whole build: host utilities are built by
+# overriding CC/LINK/LFLAGS with the native compiler (see
+# build-wasm-s1.sh), the game itself with emcc.  Both sides therefore
+# see identical -D flags (notably CROSS_TO_WASM, which pins the binary
+# data-file format to 32-bit fields -- see include/global.h).
+#
+#-PRE
+HACKDIR=/
+
+CC=emcc
+AR=emar
+LINK=emcc
+
+CFLAGS=-O2 -std=gnu17 -I../include -DNOTPARMDECL
+CFLAGS+=-Wall
+CFLAGS+=-DDLB
+CFLAGS+=-DNO_SIGNAL
+# NOTE: no -DNOMAIL here (unlike standalone wasm ports): NOMAIL drops
+# PM_MAIL_DAEMON from monst.c, shifting every later monster index by
+# one versus the native oracle build and breaking frame byte-parity.
+CFLAGS+=-DSYSCF -DSYSCF_FILE=\"/sysconf\" -DSECURE
+CFLAGS+=-DHACKDIR=\"$(HACKDIR)\"
+CFLAGS+=-DNOTTYGRAPHICS -DSTUB_GRAPHICS
+CFLAGS+=-DDEFAULT_WINDOW_SYS=\"stub\"
+CFLAGS+=-DCONFIG_ERROR_SECURE=FALSE
+CFLAGS+=-DCROSS_TO_WASM
+
+LFLAGS=-s WASM=1
+LFLAGS+=-s MODULARIZE=1
+LFLAGS+=-s EXPORT_ES6=1
+LFLAGS+=-s EXIT_RUNTIME=0
+LFLAGS+=-s ALLOW_MEMORY_GROWTH=1
+LFLAGS+=-s STACK_SIZE=1048576
+LFLAGS+=-s EXPORTED_RUNTIME_METHODS='["ENV","FS","callMain"]'
+LFLAGS+=--embed-file ../wasm-data@/
+LFLAGS+=--pre-js ../../pre-spike.js
+
+WINSRC = ../win/stub/winstub.c
+WINOBJ = winstub.o
+WINLIB =
+
+CHOWN=true
+CHGRP=true
+
+VARDIRPERM = 0755
+VARFILEPERM = 0600
+GAMEPERM = 0755
+
+#-POST
+# emcc decides output format from the target extension: link to .js
+GAME = nethack.js
+
+# SYSSRC/SYSOBJ keep the pristine Makefile.src defaults (ioctl.c,
+# unixtty.c, unixmain.c, unixunix.c, unixres.c): unixmain.c and
+# unixunix.c reference unixtty.c symbols (intron/introff, dosuspend,
+# linux console helpers) even though the tty window port itself is
+# not built.
+
+Sysunix: winstub.o
+
+winstub.o: ../win/stub/winstub.c $(HACK_H)
+	$(CC) $(CFLAGS) -c -o $@ $<

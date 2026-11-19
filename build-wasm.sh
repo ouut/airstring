@@ -1,0 +1,66 @@
+#!/bin/bash
+# airstring S1: build the fleck oracle tree (NetHack 3.6.7 + fleck
+# instrumentation) into WebAssembly with a stub window port.
+#
+# Phase discipline (learned the hard way; see REPORT.md):
+#   * One hints file (sys/unix/hints/linux-wasm-s1) for everything, so
+#     host utilities and the game see identical -D flags (CROSS_TO_WASM
+#     pins the binary data format to 32-bit fields on both sides).
+#   * src/*.o must never mix compilers: each phase starts by removing
+#     them (makedefs links ../src/monst.o + ../src/objects.o).
+#   * Generated headers (onames.h, pm.h, date.h, vis_tab.h, vis_tab.c)
+#     are regenerated explicitly right after makedefs is built, before
+#     lev_comp/dgn_comp/dat consume them (lev_comp resolves monster
+#     names through pm.h; dgn_comp stamps version_info from date.h).
+#   * The src/Makefile no-op include (Makefile.wasm-noop) is mounted
+#     ONLY for the emcc phase; it blocks header regeneration, so it
+#     must be absent during the native phases.
+#
+# Usage: ./build-wasm-s1.sh        (from this directory)
+set -e
+cd "$(dirname "$0")"
+SRC=$PWD/oracle
+source ~/workspace/tools/emsdk/emsdk_env.sh > /dev/null 2>&1
+OVR="CC=cc LINK=cc LFLAGS="
+
+echo "=== Phase 0: reset ==="
+cd "$SRC"
+make clean > /dev/null 2>&1 || true
+rm -f src/*.o util/*.o src/Sysunix src/nethack.js src/nethack.wasm
+rm -rf wasm-data
+sed -i '/^-include Makefile.wasm-noop$/d' src/Makefile 2>/dev/null || true
+
+echo "=== Setup: generate Makefiles from linux-wasm-s1 hints ==="
+sh sys/unix/setup.sh sys/unix/hints/linux-wasm-s1 > /dev/null
+sed -i '/^-include Makefile.wasm-noop$/d' src/Makefile
+
+echo "=== Phase 1a: native makedefs + regenerate all generated headers ==="
+make -C util $OVR makedefs
+make -C src $OVR ../include/onames.h ../include/pm.h ../include/date.h \
+    ../include/vis_tab.h vis_tab.c
+
+echo "=== Phase 1b: native utilities + data + native game (check-dlb) ==="
+make -C util $OVR lev_comp dgn_comp dlb
+make -C dat clean > /dev/null 2>&1 || true
+make -C dat $OVR
+make check-dlb $OVR
+
+echo "=== Phase 2: wasm-data ==="
+mkdir -p wasm-data/save
+cp dat/nhdat wasm-data/nhdat
+cp sys/unix/sysconf wasm-data/sysconf
+cp dat/symbols wasm-data/symbols
+cp dat/license wasm-data/license
+touch wasm-data/perm wasm-data/record wasm-data/logfile wasm-data/xlogfile
+touch wasm-data/save/.keep
+
+echo "=== Phase 3: emcc game build ==="
+rm -f src/*.o
+echo '-include Makefile.wasm-noop' >> src/Makefile
+make -C src
+sed -i '/^-include Makefile.wasm-noop$/d' src/Makefile
+
+mkdir -p ../out
+cp src/nethack.js src/nethack.wasm ../out/
+echo "=== Done ==="
+ls -la ../out/

@@ -7,7 +7,9 @@
 
 ## 步骤
 
-### S1 构建尖峰（先行，定生死）
+### S1 构建尖峰（先行，定生死）—— ✅ 已过门（2026-11-19，主线验收）
+
+结果：emsdk 6.0.13；`build-wasm.sh` 一条命令端到端构建出 nethack.wasm（3,881,490 B）；Node 加载完整启动进主循环、桩窗口层 nhgetch 被调用 41 次、脚本耗尽干净退出；fleck 插桩在 WASM 下工作（帧导出 3055 行、rnglog 3228 行经 MEMFS 读回）。主线独立复核：原生基线重编与 G1 金标逐字节吻合、wasm 帧 0 与金标逐字节一致（含 framehash）、rnglog 前 2536 行逐字节一致（第 2537 行首分歧，未裁定——头号嫌疑是尖峰桩喂的按键流与 smoke-01 不同，S2 以同一回放口径裁定）、主线亲手重跑 Node 冒烟产物逐字节复现。报告 `docs/s1-report.md`，源码与构建脚本已入仓。
 - 装 Emscripten SDK（版本钉死、装在 `~/workspace/tools/emsdk`），参照件 `@neth4ck/wasm-367`（同版本 3.6.7 的现成 WASM 编译＋shim，NGPL，可借鉴实现、引用注明来源）。
 - oracle 源码基线＝fleck 仓 `oracle/` 子树原样复制入本仓 `oracle/`（含 fleck 插桩与 ARM 求值顺序修复；记录来源提交 fleck `eee15cc8`／oracle 补丁 `30c97cb1`）。
 - 先本机编 host 工具（makedefs/lev_comp/dgn_comp 等生成器），再 emcc 编游戏本体；窗口层先用最小桩（winprocs 挂空实现＋nhgetch 喂固定键）求链接通过、在 Node 里跑到第一个读键点。

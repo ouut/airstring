@@ -1,0 +1,13 @@
+# No-op rules (airstring S1): keep src/Makefile from rebuilding the
+# host utilities or re-running their generators with emcc.  All of
+# these artifacts were produced natively in phase 1 of
+# build-wasm-s1.sh and are compiler-independent (C sources/headers).
+../util/makedefs: ;
+../util/lev_comp: ;
+../util/dgn_comp: ;
+../util/dlb: ;
+../include/onames.h: ;
+../include/pm.h: ;
+../include/vis_tab.h: ;
+vis_tab.c: ;
+../include/date.h: ;
