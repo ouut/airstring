@@ -13,6 +13,37 @@
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
+/* airstring S3: JS push-streaming of the frame export and RNG log.   */
+/* In the WASM build each completed frame / log line is also handed  */
+/* to the JS host as it is produced (the MEMFS files are still       */
+/* written exactly as before, so the files remain the canonical      */
+/* record and the streamed copy can be checked against them).  The   */
+/* host installs globalThis.__airstring_frame(text) and/or           */
+/* globalThis.__airstring_rngline(line); both are optional.  In a    */
+/* native build these are no-ops and nothing changes.                */
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+EM_JS(void, fleck_js_frame, (const char *buf, int len), {
+    if (globalThis.__airstring_frame)
+        globalThis.__airstring_frame(UTF8ToString(buf, len));
+});
+EM_JS(void, fleck_js_rngline, (const char *line), {
+    if (globalThis.__airstring_rngline)
+        globalThis.__airstring_rngline(UTF8ToString(line));
+});
+#else
+static void fleck_js_frame(const char *buf, int len)
+{
+    (void) buf;
+    (void) len;
+}
+static void fleck_js_rngline(const char *line)
+{
+    (void) line;
+}
+#endif
+
+/* ------------------------------------------------------------------ */
 /* environment switches (parsed once)                                  */
 
 static int fleck_env_parsed = 0;
@@ -125,9 +156,17 @@ long arg1, arg2, result;
         if (!f_rnglog_fp)
             return;
     }
-    fprintf(f_rnglog_fp, "%ld %s %ld %ld %ld\n", ++f_rng_seq, fn, arg1,
-            arg2, result);
-    (void) fflush(f_rnglog_fp);
+    {
+        /* format once, then write to the file and push to JS with
+           exactly the same bytes (airstring S3) */
+        char line[256];
+
+        (void) snprintf(line, sizeof line, "%ld %s %ld %ld %ld\n",
+                        ++f_rng_seq, fn, arg1, arg2, result);
+        (void) fputs(line, f_rnglog_fp);
+        (void) fflush(f_rnglog_fp);
+        fleck_js_rngline(line);
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -691,6 +730,7 @@ fleck_export_frame()
 
     (void) fwrite(frame.buf, 1, (unsigned) frame.len, f_export_fp);
     (void) fflush(f_export_fp);
+    fleck_js_frame(frame.buf, (int) frame.len); /* airstring S3 push */
 
     fleck_sb_free(&hero);
     fleck_sb_free(&layout);

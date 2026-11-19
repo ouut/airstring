@@ -447,6 +447,28 @@ typedef struct {
     long n_opcodes;
 } sp_lev;
 
+/* airstring S3 (WASM cross-build): the .lev binary format contains
+ * two host-width long fields on disk -- sp_lev.n_opcodes (written by
+ * lev_comp in util/lev_main.c, read by sp_level_loader in
+ * src/sp_lev.c) and opvar.vardata.l for the SPOVAR_INT/COORD/REGION/
+ * MAPCHAR/MONST/OBJ push types (same writer/reader pair).  The
+ * loader/compiler convert through these disk types at the I/O
+ * boundary only; all in-memory types stay long.  Under
+ * CROSS_TO_WASM (defined by the wasm hints for BOTH the host
+ * lev_comp build and the game build) the disk fields are a fixed
+ * 32 bits; otherwise they are exactly the original long /
+ * unsigned long, so a native build is byte-for-byte unaffected.
+ * (vardata.l is bit-packed -- SP_REGION_PACK uses bits up to 31 --
+ * hence the unsigned type.)  Same remedy family as the S1
+ * version_uint pinning in global.h. */
+#ifdef CROSS_TO_WASM
+typedef int sp_disk_long;
+typedef unsigned int sp_disk_ulong;
+#else
+typedef long sp_disk_long;
+typedef unsigned long sp_disk_ulong;
+#endif
+
 typedef struct {
     xchar x, y, direction, count, lit;
     char typ;

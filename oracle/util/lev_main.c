@@ -1483,7 +1483,12 @@ sp_lev *maze;
     if (!write_common_data(fd))
         return FALSE;
 
-    Write(fd, &(maze->n_opcodes), sizeof(maze->n_opcodes));
+    {
+        /* airstring S3: n_opcodes is a fixed-width disk field */
+        sp_disk_long disk_n_opcodes = (sp_disk_long) maze->n_opcodes;
+
+        Write(fd, &disk_n_opcodes, sizeof(disk_n_opcodes));
+    }
 
     for (i = 0; i < maze->n_opcodes; i++) {
         _opcode tmpo = maze->opcodes[i];
@@ -1507,9 +1512,15 @@ sp_lev *maze;
                 case SPOVAR_MAPCHAR:
                 case SPOVAR_MONST:
                 case SPOVAR_OBJ:
-                case SPOVAR_INT:
-                    Write(fd, &(ov->vardata.l), sizeof(ov->vardata.l));
+                case SPOVAR_INT: {
+                    /* airstring S3: vardata.l is a fixed-width disk
+                       field */
+                    sp_disk_ulong disk_vardata =
+                        (sp_disk_ulong) ov->vardata.l;
+
+                    Write(fd, &disk_vardata, sizeof(disk_vardata));
                     break;
+                }
                 case SPOVAR_VARIABLE:
                 case SPOVAR_STRING:
                     if (ov->vardata.str)

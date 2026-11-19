@@ -148,3 +148,72 @@ silently depends on. The shim pins the same state in
   and wasm (stub) builds; S2's full-run byte equality on G1 is
   strong evidence for the G1 path, but the ifdef sites need an
   explicit audit before the verifier ships.
+
+## S3 addendum — transport (ASYNCIFY), streaming, saves
+
+S3 changes how keys, frames and saves cross the JS boundary. The
+event contract above is unchanged; the S2 section that described
+`__airstring_next_key` as the queue-mode key source is superseded
+by this addendum.
+
+### Input: asynchronous key queue
+
+- The game reads keys through one funnel (`shim_nhgetch` /
+  `shim_nh_poskey`). In queue mode the funnel calls the EM_ASYNC_JS
+  bridge `shim_js_next_key_async`, the module's only ASYNCIFY
+  import (`ASYNCIFY_IMPORTS` whitelist contains exactly this one
+  symbol). The bridge awaits `globalThis.__airstring_take_key_async()`.
+- Host API (installed by `tools/pre-s3.js`, overridable before
+  module load):
+  - `__airstring_push_keys(bytes)` — append a Uint8Array (or array
+    of byte values) to the queue; wakes a suspended game.
+  - `__airstring_close_keys()` — mark end-of-input; pending and
+    future takes resolve to -1.
+  - `__airstring_take_key_async()` — Promise for the next byte, or
+    -1 at end-of-input. While the queue is empty and not closed,
+    the promise stays pending and the wasm stack stays suspended
+    (ASYNCIFY unwind); this is a wait, not EOF.
+  - `__airstring_key_waits` — counter of takes that had to suspend;
+    diagnostic evidence that the wait path was exercised.
+- Queue shape: the host may pre-seed `globalThis.__airstring_keys =
+  { bytes: [...], pos: 0 }` before module load (the S2 fixed-script
+  shape). A pre-seeded queue without close semantics is treated as
+  a complete script: exhaustion means end-of-input.
+- EOF semantics are the replay semantics: -1 from the funnel makes
+  the core exit cleanly with status 0, exactly as replay EOF does.
+- Completion signal: ASYNCIFY makes the Emscripten module factory
+  promise resolve at the first stack unwind, and `exit()` does not
+  fire `onExit` under the keep-alive runtime, so hosts must not
+  treat the factory promise as a completion signal in queue/async
+  modes. The shim fires `globalThis.__airstring_game_over(status)`
+  exactly once when the game ends, on both end paths (input EOF
+  inside the key funnel, and `exit_nhwindows` during shutdown).
+  In replay mode no async import is called and the factory promise
+  keeps its S2 meaning.
+
+### Output: frame / RNG streaming
+
+- In addition to the MEMFS files (`/fleck.frames`, `/fleck.rnglog`),
+  which remain the authoritative record, the instrumentation now
+  pushes every unit to JS as it is produced:
+  - `globalThis.__airstring_frame(uint8array)` — one complete
+    exported frame per call, in order.
+  - `globalThis.__airstring_rngline(string)` — one RNG audit line
+    per call, without the trailing newline (the MEMFS file keeps
+    the canonical newline-terminated form).
+- `tools/pre-s3.js` installs default collectors
+  (`__airstring_frame_chunks`, `__airstring_rng_chunks`); a host
+  that pre-defines the callbacks replaces them. The S3 harness
+  verifies the streamed copies are byte-identical to the MEMFS
+  files on every run.
+
+### Saves
+
+- Saves are written by the core into MEMFS (`/save/<file>`, gzip
+  disabled in this build, so the file is the raw save). Host API:
+  - `__airstring_list_saves()` — array of file names in `/save`
+    (excluding the `.keep` placeholder).
+  - `__airstring_read_save(name)` — the file bytes as a Uint8Array,
+    ready to wrap in a Blob for download or upload.
+- Save files only need to be self-consistent within the wasm
+  build; they are not part of the cross-build byte contract.

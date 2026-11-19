@@ -2678,8 +2678,10 @@ sp_lev *lvl;
     long n_opcode = 0;
     struct opvar *opdat;
     int opcode;
+    sp_disk_long disk_n_opcodes; /* airstring S3: fixed-width disk field */
 
-    Fread((genericptr_t) & (lvl->n_opcodes), 1, sizeof(lvl->n_opcodes), fd);
+    Fread((genericptr_t) &disk_n_opcodes, 1, sizeof(disk_n_opcodes), fd);
+    lvl->n_opcodes = (long) disk_n_opcodes;
     lvl->opcodes = (_opcode *) alloc(sizeof(_opcode) * (lvl->n_opcodes));
 
     while (n_opcode < lvl->n_opcodes) {
@@ -2710,10 +2712,15 @@ sp_lev *lvl;
             case SPOVAR_MAPCHAR:
             case SPOVAR_MONST:
             case SPOVAR_OBJ:
-            case SPOVAR_INT:
-                Fread((genericptr_t) & (ov->vardata.l), 1,
-                      sizeof(ov->vardata.l), fd);
+            case SPOVAR_INT: {
+                /* airstring S3: vardata.l is a fixed-width disk field */
+                sp_disk_ulong disk_vardata;
+
+                Fread((genericptr_t) &disk_vardata, 1,
+                      sizeof(disk_vardata), fd);
+                ov->vardata.l = (long) disk_vardata;
                 break;
+            }
             case SPOVAR_VARIABLE:
             case SPOVAR_STRING:
             case SPOVAR_SEL: {

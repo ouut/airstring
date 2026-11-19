@@ -9,10 +9,24 @@
 /* (i.e., num roles + 1) */
 #define LEN_HDR 3 /* Maximum length of a category name */
 
+/* airstring S3 (WASM cross-build): quest.dat is written by makedefs
+ * and read back by the game; its on-disk fields (the qt_offsets[]
+ * header array and the offset/size members of struct qtmsg) must
+ * have the same width on both sides.  Same remedy as the S1
+ * version_uint pinning in global.h: under CROSS_TO_WASM (defined by
+ * the wasm hints for BOTH the host-utility build and the game
+ * build) use a 32-bit type; otherwise keep the original long, so a
+ * native build is byte-for-byte unaffected. */
+#ifdef CROSS_TO_WASM
+typedef int qt_disk_long;
+#else
+typedef long qt_disk_long;
+#endif
+
 struct qtmsg {
     int msgnum;
     char delivery;
-    long offset, size, summary_size;
+    qt_disk_long offset, size, summary_size;
 };
 
 #ifdef MAKEDEFS_C /***** MAKEDEFS *****/
@@ -27,7 +41,7 @@ struct msghdr {
 struct qthdr {
     int n_hdr;
     char id[N_HDR][LEN_HDR];
-    long offset[N_HDR];
+    qt_disk_long offset[N_HDR];
 };
 
 /* Error message macros */

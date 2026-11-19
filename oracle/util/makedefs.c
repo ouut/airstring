@@ -2629,7 +2629,8 @@ adjust_qt_hdrs()
 {
     int i, j;
     long count = 0L, hdr_offset = sizeof(int)
-                                  + (sizeof(char) * LEN_HDR + sizeof(long))
+                                  + (sizeof(char) * LEN_HDR
+                                     + sizeof(qt_disk_long))
                                         * qt_hdr.n_hdr;
 
     for (i = 0; i < qt_hdr.n_hdr; i++) {
@@ -2659,8 +2660,8 @@ put_qt_hdrs()
     (void) fwrite((genericptr_t) & (qt_hdr.n_hdr), sizeof(int), 1, ofp);
     (void) fwrite((genericptr_t) & (qt_hdr.id[0][0]), sizeof(char) * LEN_HDR,
                   qt_hdr.n_hdr, ofp);
-    (void) fwrite((genericptr_t) & (qt_hdr.offset[0]), sizeof(long),
-                  qt_hdr.n_hdr, ofp);
+    (void) fwrite((genericptr_t) & (qt_hdr.offset[0]),
+                  sizeof(qt_disk_long), qt_hdr.n_hdr, ofp);
     if (debug) {
         for (i = 0; i < qt_hdr.n_hdr; i++)
             Fprintf(stderr, "%s @ %ld, ", qt_hdr.id[i], qt_hdr.offset[i]);

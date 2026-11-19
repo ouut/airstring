@@ -25,8 +25,10 @@
  * comes through shim_nhgetch()/shim_nh_poskey().  When FLECK_REPLAY
  * is active the bytes come from fleck_replay_getch() -- exactly the
  * tty arrangement -- otherwise they are pulled from a JS-supplied
- * queue (globalThis.__airstring_next_key).  Queue exhaustion in a
- * scripted run mirrors replay EOF: clean exit, status 0.
+ * queue via the async bridge (globalThis.__airstring_take_key_
+ * async, S3/ASYNCIFY): the game suspends until a key is pushed,
+ * and only a host-side close of the input produces the -1 that
+ * mirrors replay EOF (clean exit, status 0).
  *
  * The fleck frame/RNG export instrumentation reads game-internal
  * state and is untouched by this file.
@@ -43,25 +45,141 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* ------------------------------------------------------------------ */
+/* Stable qsort override (wasm build only; this file is not part of   */
+/* the native build).                                                 */
+/*                                                                    */
+/* Root cause (S3, G2 gate): NetHack's sort_rooms() comparator        */
+/* do_comp() compares only lx, so the relative order of rooms with    */
+/* equal lx is whatever the libc qsort leaves behind.  The native     */
+/* golden files were produced under glibc, whose qsort takes the      */
+/* stable mergesort path; musl's qsort is not stable and swapped an   */
+/* lx==4 pair on Dlvl 10 of seed 37, changing the room picked for     */
+/* the up-stairs (somex modulus rn2(5) instead of rn2(6); first RNG   */
+/* divergence at draw 30164).  Giving the wasm build a stable         */
+/* mergesort qsort reproduces the glibc semantics for every call      */
+/* site; comparators with a total order are unaffected.               */
+/* ------------------------------------------------------------------ */
+static void
+sq_stable_msort(char *base, char *tmp, size_t lo, size_t hi, size_t size,
+                int (*cmp)(const void *, const void *))
+{
+    size_t mid, i, j, k;
+
+    if (hi - lo < 2)
+        return;
+    mid = lo + (hi - lo) / 2;
+    sq_stable_msort(base, tmp, lo, mid, size, cmp);
+    sq_stable_msort(base, tmp, mid, hi, size, cmp);
+    i = lo;
+    j = mid;
+    k = lo;
+    while (i < mid && j < hi) {
+        if (cmp(base + i * size, base + j * size) <= 0) {
+            memcpy(tmp + k * size, base + i * size, size);
+            i++;
+        } else {
+            memcpy(tmp + k * size, base + j * size, size);
+            j++;
+        }
+        k++;
+    }
+    while (i < mid) {
+        memcpy(tmp + k * size, base + i * size, size);
+        i++;
+        k++;
+    }
+    while (j < hi) {
+        memcpy(tmp + k * size, base + j * size, size);
+        j++;
+        k++;
+    }
+    memcpy(base + lo * size, tmp + lo * size, (hi - lo) * size);
+}
+
+void
+qsort(void *base, size_t nmemb, size_t size,
+      int (*compar)(const void *, const void *))
+{
+    char *tmp;
+
+    if (nmemb < 2 || size == 0)
+        return;
+    tmp = (char *) malloc(nmemb * size);
+    if (!tmp) {
+        /* stable insertion-sort fallback */
+        size_t i, j;
+        char *b = (char *) base;
+        char *one = (char *) malloc(size);
+
+        if (!one)
+            return;
+        for (i = 1; i < nmemb; i++) {
+            memcpy(one, b + i * size, size);
+            j = i;
+            while (j > 0 && compar(b + (j - 1) * size, one) > 0) {
+                memcpy(b + j * size, b + (j - 1) * size, size);
+                j--;
+            }
+            memcpy(b + j * size, one, size);
+        }
+        free(one);
+        return;
+    }
+    sq_stable_msort((char *) base, tmp, 0, nmemb, size, compar);
+    free(tmp);
+}
+
+
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
-/* JS bridge (implemented in tools/pre-s2.js / the hosting page):
+/* JS bridge (implemented in tools/pre-s3.js / the hosting page):
  *   __airstring_event(json_string)  -- receive one contract event
- *   __airstring_next_key()          -- queue mode: next key or -1
+ *   __airstring_take_key_async()    -- queue mode: Promise for the
+ *                                      next key byte, or -1 at
+ *                                      end-of-input (S3, ASYNCIFY)
+ * The S2 bridge also had a synchronous __airstring_next_key(); S3
+ * replaces it with the async form below so the game can suspend
+ * inside nhgetch until a key actually arrives instead of having
+ * to treat an empty queue as EOF.
  */
 EM_JS(void, shim_js_event, (const char *json), {
     if (globalThis.__airstring_event)
         globalThis.__airstring_event(UTF8ToString(json));
 });
-EM_JS(int, shim_js_next_key, (), {
-    return globalThis.__airstring_next_key
-               ? globalThis.__airstring_next_key()
-               : -1;
+EM_ASYNC_JS(int, shim_js_next_key_async, (), {
+    if (globalThis.__airstring_take_key_async)
+        return await globalThis.__airstring_take_key_async();
+    return -1;
+});
+/* S3 host completion signal: fired exactly once when the game
+ * ends, on either end path (natural shutdown via exit_nhwindows,
+ * or the input-EOF clean exit in shim_next_key_raw).  Hosts must
+ * wait for this -- with ASYNCIFY the module factory promise
+ * resolves at the first stack unwind, long before main() is
+ * actually done, and exit() under a kept-alive runtime does not
+ * reach the factory promise either. */
+EM_JS(void, shim_js_game_over, (int code), {
+    if (globalThis.__airstring_game_over)
+        globalThis.__airstring_game_over(code);
 });
 #else
 static void shim_js_event(const char *json) { (void) json; }
-static int shim_js_next_key(void) { return -1; }
+static int shim_js_next_key_async(void) { return -1; }
+static void shim_js_game_over(int code) { (void) code; }
 #endif
+
+static int shim_game_over_signalled = 0;
+
+static void
+shim_signal_game_over(code)
+int code;
+{
+    if (shim_game_over_signalled)
+        return;
+    shim_game_over_signalled = 1;
+    shim_js_game_over(code);
+}
 
 /* ------------------------------------------------------------------ */
 /* virtual terminal geometry (matches the golden-run pty: TERM=xterm */
@@ -161,18 +279,21 @@ shim_next_key_raw()
         return fleck_replay_getch(); /* exits cleanly on EOF */
     }
     {
-        int k = shim_js_next_key();
+        /* S3: the JS key source is async (ASYNCIFY).  It suspends
+           the game until a key is pushed, and returns -1 only when
+           the host has closed the input (scripted runs) -- which
+           mirrors the replay EOF semantics (clean exit, status 0,
+           no save), exactly as the S2 synchronous queue did on
+           exhaustion. */
+        int k = shim_js_next_key_async();
 
         if (k < 0) {
-            /* Scripted-run queue exhausted: mirror the replay EOF
-               semantics (clean exit, status 0, no save).  In the
-               interactive product (S3+) the JS side never returns
-               -1; it suspends until a key is available instead. */
             fprintf(stderr,
-                    "[shim] key queue exhausted after %lu keys; "
+                    "[shim] key input closed after %lu keys; "
                     "exiting cleanly\n",
                     shim_keys_consumed);
             fflush(stderr);
+            shim_signal_game_over(0);
             exit(EXIT_SUCCESS);
         }
         return k;
@@ -2560,6 +2681,7 @@ const char *str UNUSED;
     shim_emit("{\"t\":\"exit\"}");
     fprintf(stderr, "[shim] exit_nhwindows (keys consumed: %lu)\n",
             shim_keys_consumed);
+    shim_signal_game_over(0);
 }
 
 static void
