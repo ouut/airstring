@@ -19,6 +19,16 @@
  */
 import { COMMANDS, DIRS, dirByte } from './commands.js';
 
+/* S6 cloud transport (web/firebase.js): when a real Firebase
+ * config is present AND a user is signed in, recording chunks go
+ * to Cloud Storage and the finished game is indexed in Firestore.
+ * In every other case `cloud` is null (or reports no user) and the
+ * upload path below is the S5 local-stub behaviour, unchanged. */
+let cloud = null;
+try { cloud = (await import('./firebase.js')).default; }
+catch (e) { cloud = null; }
+function cloudActive() { return !!(cloud && cloud.currentUser()); }
+
 const FIXED_DATE = 1700000000; /* spec SS2.2: pinned, passport value */
 const $ = (id) => document.getElementById(id);
 
@@ -724,15 +734,21 @@ function flushRecords(final) {
   const payload = { gameId: S.id, seq: S.recSeq++, final: !!final, records: batch };
   S.uploadChain = S.uploadChain.then(async () => {
     try {
-      const r = await fetch('./upload', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!r.ok) throw new Error('upload ' + r.status);
+      if (cloudActive()) {
+        /* S6: chunk object in Storage, named by seq (idempotent) */
+        await cloud.uploadChunk(payload);
+        S.cloudTransport = true;
+      } else {
+        const r = await fetch('./upload', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!r.ok) throw new Error('upload ' + r.status);
+      }
       S.uploadOk = (S.uploadOk || 0) + batch.length;
     } catch (e) {
-      /* stub unreachable: records stay in memory; the download
+      /* backend unreachable: records stay in memory; the download
          button below still yields the complete stream */
       S.uploadFailed = true;
     }
@@ -852,13 +868,36 @@ function handleGameOver(status) {
     frames: S.lastFrame ? S.lastFrame.frame + 1 : 0, keysTotal: S.keysTotal,
   });
   flushRecords(true);
+  const useCloud = cloudActive();
+  if (useCloud) {
+    /* S6: once every chunk has landed, store the canonical
+       recording in Storage and index the game in Firestore with
+       status 'pending' -- the verdict itself is written later by
+       the verification worker, never by the client. */
+    const endRec = S.records[S.records.length - 1];
+    const header = S.records[0];
+    S.uploadChain = S.uploadChain.then(async () => {
+      try {
+        await cloud.finalizeGame({
+          gameId: S.id, seed: S.seed, seedSource: S.seedSource,
+          date: S.date, options: S.options,
+          restored: header && header.k === 'header'
+            ? header.restored : null,
+          end: status, turns: endRec.turns, frames: endRec.frames,
+          keysTotal: endRec.keysTotal,
+          recordingText: recordingText(),
+        });
+      } catch (e) { S.uploadFailed = true; }
+    });
+  }
   const go = $('gameover');
   go.hidden = false;
   go.innerHTML = '';
   go.append(document.createTextNode(
     `本局结束（status ${status}）。录制流 ${S.records.length} 条记录` +
     (S.uploadFailed ? '（上传桩不可达，已保留在页面内存，可用下方按钮下载）'
-                    : '，已分块上传至后端桩') + '。'));
+     : useCloud ? '，已分块上传至云端（Storage＋Firestore，状态 pending 待验真）'
+                : '，已分块上传至后端桩') + '。'));
   if (S.seedSource === 'random') {
     const d = document.createElement('div');
     d.className = 'seed';

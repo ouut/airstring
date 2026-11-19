@@ -1,0 +1,1 @@
+{"description":"airstring S6 verification worker: headless-replay a recording and compare its frame hash chain","engines":{"node":">=20"},"name":"airstring-verifier","private":true,"scripts":{"start":"node server.mjs"},"type":"module","version":"1.0.0"}

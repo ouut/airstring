@@ -1,0 +1,1 @@
+{"fieldOverrides":[],"indexes":[{"collectionGroup":"games","fields":[{"fieldPath":"status","order":"ASCENDING"},{"fieldPath":"createdAt","order":"DESCENDING"}],"queryScope":"COLLECTION"},{"collectionGroup":"games","fields":[{"fieldPath":"uid","order":"ASCENDING"},{"fieldPath":"createdAt","order":"DESCENDING"}],"queryScope":"COLLECTION"}]}

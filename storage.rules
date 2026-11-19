@@ -1,0 +1,55 @@
+// airstring Cloud Storage rules (S6).
+//
+// Layout (written by web/firebase.js, read by the verifier):
+//   recordings/<uid>/<gameId>.jsonl          canonical recording
+//   recordings/<uid>/<gameId>/chunk-<seq>.json
+//                                            in-flight upload chunks
+//   saves/<uid>/<file>                       exported save blobs
+//                                            (cross-device resume)
+//
+// Everything is owner-only: a signed-in user may read/write solely
+// under their own <uid>/ prefix. Recordings are NOT public -- the
+// leaderboard exposes only Firestore metadata of verified games.
+// The verifier accesses objects with its service account (Admin
+// SDK / IAM), which bypasses these rules.
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function ownUid(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    // Canonical recording of one game (KB-scale; 5 MiB hard cap is
+    // generous headroom, not an expectation).
+    match /recordings/{uid}/{file} {
+      allow read: if ownUid(uid);
+      allow write: if ownUid(uid)
+                   && file.matches('[^/]+[.]jsonl')
+                   && request.resource.size < 5 * 1024 * 1024
+                   && request.resource.contentType
+                        == 'application/x-ndjson';
+    }
+
+    // Chunk objects of an in-flight chunked upload (one JSON
+    // payload per object, named by sequence number).
+    match /recordings/{uid}/{gameId}/{chunk} {
+      allow read: if ownUid(uid);
+      allow write: if ownUid(uid)
+                   && chunk.matches('chunk-[0-9]+[.]json')
+                   && request.resource.size < 1024 * 1024;
+    }
+
+    // Save-game blobs for cross-device resume.
+    match /saves/{uid}/{file} {
+      allow read: if ownUid(uid);
+      allow write: if ownUid(uid)
+                   && request.resource.size < 5 * 1024 * 1024;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

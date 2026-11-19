@@ -1,0 +1,87 @@
+// airstring Firestore rules (S6).
+//
+// Model (docs/recording-format.md, docs/s6-deploy.md):
+//   * A signed-in client creates its own game doc in /games/{gameId}
+//     at game end with status 'pending' and NO verdict fields.
+//   * The verification verdict (status -> 'verified'/'rejected',
+//     plus verdict detail fields) is written ONLY by the Cloud Run
+//     verifier through the Admin SDK / service account, which
+//     bypasses these rules. Clients can never set or change them.
+//   * Leaderboard: games whose status is 'verified' are publicly
+//     readable. Everything else is owner-only.
+//
+// Firestore rules are NOT filters: a list query is only allowed
+// when its constraints prove every returned doc is readable.
+// Clients must therefore query the leaderboard as
+//   where('status', '==', 'verified')            (optionally ordered)
+// and personal history as
+//   where('uid', '==', auth.uid)
+// Any broader query is rejected by the rules engine, by design.
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+    function isOwner(data) {
+      return signedIn() && data.uid == request.auth.uid;
+    }
+    // Fields only the verifier may write (via Admin SDK, which
+    // bypasses rules; listing them here makes client writes that
+    // include any of them fail the create/update checks below).
+    function verdictFields() {
+      return ['verdict', 'verdictReason', 'verifiedAt',
+              'framesCompared', 'framesMatched', 'firstMismatch',
+              'recordingSha256'];
+    }
+
+    match /games/{gameId} {
+      // Read: verified games are public (leaderboard); the owner
+      // can always read their own games (incl. pending/rejected).
+      allow get, list: if resource.data.status == 'verified'
+                       || isOwner(resource.data);
+
+      // Create: own game, starts life as 'pending', carries no
+      // verdict fields, and pins the controlled conditions
+      // (date is the site-wide pinned value, spec SS2.2).
+      allow create: if isOwner(request.resource.data)
+                    && request.resource.data.status == 'pending'
+                    && !request.resource.data.keys()
+                         .hasAny(verdictFields())
+                    && request.resource.data.date == 1700000000;
+
+      // Update by the owner: only late-arriving summary fields of
+      // their own still-pending game may change. uid/seed/date/
+      // options are immutable (the diff allowlist excludes them),
+      // status can never move away from 'pending' client-side,
+      // and verdict fields stay verifier-only.
+      allow update: if isOwner(resource.data)
+                    && request.resource.data.uid == resource.data.uid
+                    && request.resource.data.status == 'pending'
+                    && resource.data.status == 'pending'
+                    && !request.resource.data.keys()
+                         .hasAny(verdictFields())
+                    && request.resource.data
+                         .diff(resource.data)
+                         .affectedKeys()
+                         .hasOnly(['end', 'turns', 'frames',
+                                   'keysTotal', 'updatedAt']);
+
+      // Games and their recordings are archival assets (spec
+      // SS6.3): clients never delete them.
+      allow delete: if false;
+    }
+
+    // Verdict records are written and read by the verifier only
+    // (Admin SDK bypasses rules; clients get nothing).
+    match /verdicts/{gameId} {
+      allow read, write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
