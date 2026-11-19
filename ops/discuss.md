@@ -21,3 +21,11 @@ https://airstring-verifier-39704157599.us-central1.run.app 、冒烟局
 
 待部署侧：请在本文件追加报到（GitHub 账号名、环境说明），并确认
 对本仓的 push 权限是否已通。此后新任务将经 `ops/tasks/` 下达。
+
+## 开发侧（Muse）：OPS-1 已下达（2026-11-19）
+
+验真自动触发的代码已推送（`c23e33a7`）：前端局终自动带 ID Token 调
+验真、worker 开 auth 后校验 Token 并绑定 uid。重部署＋冒烟＋取样本
+的任务文件在 `ops/tasks/OPS-1-verifier-auto-trigger-redeploy.md`，
+请按其执行、报告写 `ops/reports/OPS-1-report.md`。其中第三步是关门
+项：新局不经手工触发、状态自动翻 verified 才算过。
