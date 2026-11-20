@@ -23,6 +23,30 @@
 
 <!-- ============ setup screen ============ -->
 <main id="setup">
+  <!-- Guest reminder (shown when signed out) -->
+  <div id="guest-banner" class="guest-banner" hidden>
+    <div class="guest-banner-text">
+      <strong>游客试玩模式：</strong>不保存进度（刷新页面将丢失当前对局）、不计入云端榜单。登录 Google 即可自动保存并随时跨设备续打。
+    </div>
+    <button id="btn-guest-signin" type="button" class="mini-btn primary-mini">Google 登录</button>
+  </div>
+
+  <!-- Signed-in user's in-progress games (multi-game, zero upload/download) -->
+  <section id="active-games-card" class="active-games-card" hidden>
+    <div class="lobby-head">
+      <h2>我的进行中对局</h2>
+      <div class="active-head-actions">
+        <span id="active-sync-hint" class="hint"></span>
+        <button id="btn-refresh-active" type="button" class="mini-btn">同步</button>
+      </div>
+    </div>
+    <div id="active-games-list" class="active-games-list"></div>
+    <details id="shelved-games-wrap" class="sec-collapse shelved-wrap" hidden>
+      <summary id="shelved-games-summary">已搁置对局（超过 30 天未操作，随时可续打或分叉）</summary>
+      <div id="shelved-games-list" class="active-games-list"></div>
+    </details>
+  </section>
+
   <div class="setup-grid">
     <section class="setup-card">
       <div class="setup-head">
@@ -75,14 +99,9 @@
         </div>
 
         <details class="sec-collapse">
-          <summary>续玩（导入存档）与公平验真口径</summary>
+          <summary>公平验真与自动保存说明</summary>
           <div class="collapse-body">
-            <p class="notice">为保证成绩可验真，本站对局的游戏内日期固定（与 fleck 护照一致），月相恒定，不投放 bones 文件，wizard / explore 模式不开放。</p>
-            <div class="import-row">
-              <span class="hint">导入此前导出的存档文件（须与开局名字一致）：</span>
-              <input id="import-file" type="file">
-              <span id="import-info" class="hint"></span>
-            </div>
+            <p class="notice">为保证成绩可验真，本站对局的游戏内日期固定（与 fleck 护照一致），月相恒定，不投放 bones 文件，wizard / explore 模式不开放。所有进度均由平台按按键流自动托管保存，不支持手工上传或下载存档。</p>
           </div>
         </details>
 
@@ -124,6 +143,31 @@
     <div id="grid" role="img" aria-label="地图"></div>
 
     <button id="btn-zoom" type="button" hidden title="切换跟随视角与全图缩览">🗺 全图</button>
+
+    <!-- Non-intrusive toast (login claim / auto-fork notice) -->
+    <div id="game-toast" hidden></div>
+
+    <!-- Video-style buffer fast-forward progress overlay -->
+    <div id="buffer-overlay" hidden>
+      <div class="buffer-card">
+        <div id="buffer-title" class="buffer-title">正在缓冲对局…</div>
+        <div class="buffer-track"><div id="buffer-bar-fill"></div></div>
+        <div id="buffer-detail" class="buffer-detail">准备引擎…</div>
+        <div id="buffer-sub" class="buffer-sub">正在逐帧重放历史按键，请稍候</div>
+      </div>
+    </div>
+
+    <!-- Same-device multi-tab lock overlay -->
+    <div id="tab-lock-overlay" hidden>
+      <div class="buffer-card">
+        <div class="buffer-title">你已在另一个标签页继续本局</div>
+        <div class="buffer-sub">为避免多标签页同时写入冲突，本页已暂停操作与保存。</div>
+        <div class="tab-lock-actions">
+          <button id="btn-tab-reclaim" type="button" class="primary">在此页重新接管</button>
+          <button id="btn-tab-back" type="button">返回开局页</button>
+        </div>
+      </div>
+    </div>
 
     <!-- True overlay: Curses right-side menu OR centered text/RIP modal -->
     <div id="overlay" hidden>
@@ -177,7 +221,7 @@
   <!-- Bottom thumb control zone (mobile portrait default; hidden on desktop unless toggled) -->
   <div id="actionbar"></div>
 
-  <!-- Slide-over game menu drawer (seed info, download rec, saves, commands, exit) -->
+  <!-- Slide-over game menu drawer (seed info, sync status, fork, commands, exit) -->
   <div id="game-drawer" hidden>
     <div id="game-drawer-backdrop"></div>
     <div id="game-drawer-panel">
@@ -185,12 +229,12 @@
         <span class="drawer-title">局内菜单</span>
         <button id="btn-drawer-close" type="button" class="mini-btn">关闭</button>
       </div>
+      <div id="drawer-auth-banner" class="drawer-sync-box"></div>
       <div id="seed-banner" class="seedline"></div>
       <div id="game-tools">
         <button id="btn-commands" type="button">全部命令面板</button>
         <button id="btn-drawer-log" type="button">查看消息历史</button>
-        <button id="btn-export-rec" type="button">下载录制流 (.jsonl)</button>
-        <span id="saves-box"></span>
+        <button id="btn-fork-now" type="button">从当前回合分叉新局</button>
         <button id="btn-newgame" type="button" class="danger-btn">返回开局页</button>
       </div>
       <div class="drawer-foot">

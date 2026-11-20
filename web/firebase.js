@@ -1,29 +1,27 @@
-/* airstring S6 cloud transport (Firebase).
+/* airstring cloud transport (Firebase Auth + Firestore + Storage).
  *
  * Loaded lazily by web/airstring.js. When the config in
  * web/firebase-config.js is still placeholder -- or the SDK cannot
  * be loaded (offline, blocked CDN) -- this module's default export
- * is null and the frontend keeps the S5 behaviour byte-for-byte:
- * chunked POSTs to the local stub at ./upload.
+ * is null and the frontend degrades gracefully to guest/offline mode.
  *
  * When configured, it provides:
- *   currentUser()          -> the signed-in user or null
- *   uploadChunk(payload)   -> one recording chunk object in
- *                             Storage (recordings/<uid>/<gameId>/
- *                             chunk-<seq>.json; seq-named, so a
- *                             retry overwrites the same object --
- *                             the idempotent-upload口径 of
- *                             docs/recording-format.md SS3)
- *   finalizeGame(info)     -> the canonical recordings/<uid>/
- *                             <gameId>.jsonl in Storage plus the
- *                             /games/<gameId> doc in Firestore
- *                             (status 'pending'; verdict fields are
- *                             verifier-only, see firestore.rules)
- *   renderAuthBox(el)      -> Google sign-in/out UI in #auth-box
- *
- * Auth is Google-only (spec SS4.1 OAuth-only). Playing is NOT
- * gated on sign-in: a signed-out session simply keeps using the
- * local stub transport, exactly as in S5.
+ *   currentUser()            -> signed-in user or null
+ *   isAuthReady()            -> whether initial onAuthStateChanged fired
+ *   onUserChange(cb)         -> subscribe to auth changes (returns unsub)
+ *   signIn()                 -> Google sign-in popup
+ *   signOut()                -> sign out
+ *   renderAuthBox()          -> Google sign-in/out UI in #auth-box
+ *   loadActiveIndex()        -> reads saves/<uid>/_index.json
+ *   loadActiveGame(gameId)   -> reads saves/<uid>/<gameId>.json
+ *   saveActiveGame(snapshot) -> single-file overwrite saves/<uid>/<gameId>.json
+ *                               + updates saves/<uid>/_index.json
+ *                               (zero orphan chunk-*.json files)
+ *   deleteActiveGame(gameId) -> removes active game & updates _index.json
+ *   finalizeGame(info)       -> canonical recordings/<uid>/<gameId>.jsonl
+ *                               + /games/<gameId> doc (pending)
+ *                               + auto-trigger Cloud Run /verify
+ *                               + cleans up active game slot
  */
 const SDK = 'https://www.gstatic.com/firebasejs/10.12.2/';
 const LOAD_TIMEOUT_MS = 8000;
@@ -61,12 +59,67 @@ try {
     const storage = stMod.getStorage(app);
 
     let user = null;
-    const userWaiters = [];
-    authMod.onAuthStateChanged(auth, (u) => {
-      user = u;
-      renderAuthBox();
-      for (const cb of userWaiters.splice(0)) cb(u);
-    });
+    let authReady = false;
+    const listeners = new Set();
+    let indexCache = null;
+    let indexCacheUid = null;
+
+    async function readJsonObject(path) {
+      try {
+        const buf = await stMod.getBytes(stMod.ref(storage, path));
+        const text = new TextDecoder().decode(buf);
+        const parsed = JSON.parse(text);
+        if (parsed && parsed.deleted) return null;
+        return parsed;
+      } catch (e) {
+        const code = e && e.code ? String(e.code) : '';
+        if (code === 'storage/object-not-found' || code === 'storage/unauthorized') {
+          return null;
+        }
+        throw e;
+      }
+    }
+
+    async function writeJsonObject(path, obj) {
+      await stMod.uploadString(
+        stMod.ref(storage, path),
+        JSON.stringify(obj),
+        'raw',
+        { contentType: 'application/json' },
+      );
+    }
+
+    async function getActiveIndexInternal(forceReload) {
+      if (!user) return { version: 1, games: {} };
+      if (!forceReload && indexCache && indexCacheUid === user.uid) {
+        return indexCache;
+      }
+      const data = await readJsonObject('saves/' + user.uid + '/_index.json');
+      const idx = (data && typeof data.games === 'object' && data.games)
+        ? { version: 1, games: { ...data.games } }
+        : { version: 1, games: {} };
+      indexCache = idx;
+      indexCacheUid = user.uid;
+      return idx;
+    }
+
+    async function putActiveIndexInternal(idx) {
+      if (!user) return;
+      indexCache = idx;
+      indexCacheUid = user.uid;
+      await writeJsonObject('saves/' + user.uid + '/_index.json', idx);
+    }
+
+    async function signIn() {
+      const provider = new authMod.GoogleAuthProvider();
+      return authMod.signInWithPopup(auth, provider);
+    }
+
+    async function signOut() {
+      indexCache = null;
+      indexCacheUid = null;
+      return authMod.signOut(auth);
+    }
 
     function renderAuthBox() {
       const box = document.getElementById('auth-box');
@@ -80,25 +133,48 @@ try {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.textContent = '登出';
-        btn.addEventListener('click', () => authMod.signOut(auth));
+        btn.addEventListener('click', () => signOut());
         box.append(label, document.createTextNode(' '), btn);
       } else {
         const btn = document.createElement('button');
         btn.type = 'button';
-        btn.textContent = '使用 Google 登录（成绩上云）';
-        btn.addEventListener('click', async () => {
-          const provider = new authMod.GoogleAuthProvider();
-          await authMod.signInWithPopup(auth, provider);
-        });
+        btn.textContent = '使用 Google 登录（云端续打与上榜）';
+        btn.addEventListener('click', () => signIn().catch((e) => {
+          console.warn('[airstring] sign-in failed:', e && e.message || e);
+        }));
         box.appendChild(btn);
       }
     }
 
+    authMod.onAuthStateChanged(auth, (u) => {
+      const prevUid = user ? user.uid : null;
+      user = u;
+      authReady = true;
+      if (!u || u.uid !== prevUid) {
+        indexCache = null;
+        indexCacheUid = null;
+      }
+      renderAuthBox();
+      for (const cb of listeners) {
+        try { cb(u); } catch (e) { console.warn('[airstring] auth listener err:', e); }
+      }
+    });
+
     cloud = {
       currentUser: () => user,
+      isAuthReady: () => authReady,
+      onUserChange(cb) {
+        listeners.add(cb);
+        if (authReady) {
+          try { cb(user); } catch (e) { /* ignore */ }
+        }
+        return () => listeners.delete(cb);
+      },
+      signIn,
+      signOut,
       renderAuthBox,
 
-      /* one chunk object per flush, named by seq (idempotent) */
+      /* Legacy chunk upload retained for compatibility only */
       async uploadChunk(payload) {
         if (!user) throw new Error('not-signed-in');
         const ref = stMod.ref(storage,
@@ -108,34 +184,95 @@ try {
           'raw', { contentType: 'application/json' });
       },
 
-      /* canonical recording + the games index doc (pending) */
+      async loadActiveIndex(forceReload = false) {
+        if (!user) return { version: 1, games: {} };
+        return getActiveIndexInternal(forceReload);
+      },
+
+      async loadActiveGame(gameId) {
+        if (!user) return null;
+        return readJsonObject('saves/' + user.uid + '/' + gameId + '.json');
+      },
+
+      async saveActiveGame(snapshot) {
+        if (!user) throw new Error('not-signed-in');
+        const uid = user.uid;
+        await writeJsonObject('saves/' + uid + '/' + snapshot.gameId + '.json', snapshot);
+        const idx = await getActiveIndexInternal(false);
+        idx.games[snapshot.gameId] = {
+          gameId: snapshot.gameId,
+          seed: snapshot.seed,
+          seedSource: snapshot.seedSource,
+          options: snapshot.options,
+          playerName: snapshot.playerName || 'fleck',
+          roleEn: snapshot.roleEn || 'valkyrie',
+          turns: snapshot.turns || 0,
+          dlvl: snapshot.dlvl || 1,
+          hp: snapshot.hp != null ? snapshot.hp : null,
+          hpmax: snapshot.hpmax != null ? snapshot.hpmax : null,
+          startedAt: snapshot.startedAt || null,
+          updatedAt: snapshot.updatedAt || new Date().toISOString(),
+          sessionId: snapshot.sessionId || null,
+          parentGameId: snapshot.parentGameId || null,
+          forkTurn: snapshot.forkTurn != null ? snapshot.forkTurn : null,
+        };
+        await putActiveIndexInternal(idx);
+      },
+
+      async deleteActiveGame(gameId) {
+        if (!user) return;
+        const uid = user.uid;
+        const objRef = stMod.ref(storage, 'saves/' + uid + '/' + gameId + '.json');
+        try {
+          await stMod.deleteObject(objRef);
+        } catch (e) {
+          /* Under S6 storage.rules where write requires request.resource.size,
+             deleteObject returns unauthorized; tombstone with 16-byte payload instead. */
+          try {
+            await writeJsonObject('saves/' + uid + '/' + gameId + '.json', { deleted: true });
+          } catch (_) { /* best-effort */ }
+        }
+        try {
+          const idx = await getActiveIndexInternal(false);
+          if (idx.games && idx.games[gameId]) {
+            delete idx.games[gameId];
+            await putActiveIndexInternal(idx);
+          }
+        } catch (_) { /* best-effort */ }
+      },
+
+      /* canonical recording + the games index doc (pending) + auto-verify */
       async finalizeGame(info) {
         if (!user) throw new Error('not-signed-in');
         const recRef = stMod.ref(storage,
           'recordings/' + user.uid + '/' + info.gameId + '.jsonl');
         await stMod.uploadString(recRef, info.recordingText,
           'raw', { contentType: 'application/x-ndjson' });
-        await fsMod.setDoc(fsMod.doc(db, 'games', info.gameId), {
+        const docData = {
           gameId: info.gameId,
           uid: user.uid,
           seed: info.seed,
           seedSource: info.seedSource,
           date: info.date,
           options: info.options,
-          restored: info.restored,
+          restored: null,
           status: 'pending',
           end: info.end,
           turns: info.turns,
           frames: info.frames,
           keysTotal: info.keysTotal,
           createdAt: fsMod.serverTimestamp(),
-        });
-        /* Auto-trigger verification (M0 closing item): ask the
-         * Cloud Run verifier to replay this recording now,
-         * authenticated with the player's ID token (the worker
-         * binds the token uid to the recording path). Best
-         * effort: any failure leaves the doc 'pending' and
-         * never affects the finished game. */
+        };
+        if (info.parentGameId) {
+          docData.parentGameId = info.parentGameId;
+          docData.forkTurn = info.forkTurn != null ? info.forkTurn : 0;
+        }
+        await fsMod.setDoc(fsMod.doc(db, 'games', info.gameId), docData);
+
+        /* Clean up active slot once finalized */
+        try { await cloud.deleteActiveGame(info.gameId); } catch (_) { }
+
+        /* Auto-trigger verification */
         try {
           const vurl = globalThis.AIRSTRING_VERIFIER_URL;
           if (vurl) {
@@ -162,8 +299,6 @@ try {
     renderAuthBox();
   }
 } catch (e) {
-  /* SDK unreachable or misconfigured: stay on the S5 stub path.
-   * Logged, not fatal -- the game itself never depends on this. */
   console.warn('[airstring] firebase inactive:', e && e.message || e);
   cloud = null;
 }

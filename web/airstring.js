@@ -229,15 +229,172 @@ async function loadVerifiedLobby() {
   }
 }
 
+/* ---------------- IndexedDB local persistence (signed-in uid only) ---------------- */
+const IDB_NAME = 'airstring_active_v1';
+const IDB_STORE = 'games';
+const SHELVE_AGE_MS = 30 * 24 * 3600 * 1000; /* 30 days */
+const MAX_ACTIVE_SOFT_CAP = 50;
+
+let idbPromise = null;
+function openIdb() {
+  if (idbPromise) return idbPromise;
+  idbPromise = new Promise((resolve, reject) => {
+    if (!globalThis.indexedDB) { resolve(null); return; }
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) {
+        const st = db.createObjectStore(IDB_STORE, { keyPath: 'pk' });
+        st.createIndex('by_uid', 'uid', { unique: false });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => resolve(null);
+  });
+  return idbPromise;
+}
+async function idbPutGame(uid, snap) {
+  if (!uid || !snap || !snap.gameId) return;
+  const db = await openIdb();
+  if (!db) return;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).put({ ...snap, uid, pk: uid + ':' + snap.gameId });
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+    } catch (e) { resolve(false); }
+  });
+}
+async function idbGetGame(uid, gameId) {
+  if (!uid || !gameId) return null;
+  const db = await openIdb();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const req = tx.objectStore(IDB_STORE).get(uid + ':' + gameId);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    } catch (e) { resolve(null); }
+  });
+}
+async function idbListGames(uid) {
+  if (!uid) return [];
+  const db = await openIdb();
+  if (!db) return [];
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const idx = tx.objectStore(IDB_STORE).index('by_uid');
+      const req = idx.getAll(uid);
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => resolve([]);
+    } catch (e) { resolve([]); }
+  });
+}
+async function idbDeleteGame(uid, gameId) {
+  if (!uid || !gameId) return;
+  const db = await openIdb();
+  if (!db) return;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).delete(uid + ':' + gameId);
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+    } catch (e) { resolve(false); }
+  });
+}
+
+/* ---------------- same-device multi-tab lock (BroadcastChannel) ---------------- */
+const TAB_ID = (crypto.randomUUID ? crypto.randomUUID()
+  : ('tab-' + Date.now() + '-' + Math.random().toString(16).slice(2)));
+const tabChannel = (typeof BroadcastChannel !== 'undefined')
+  ? new BroadcastChannel('airstring_session_lock') : null;
+
+function broadcastTabClaim(gameId) {
+  if (!tabChannel || !gameId) return;
+  try { tabChannel.postMessage({ type: 'claim', gameId, tabId: TAB_ID }); } catch (e) { }
+}
+if (tabChannel) {
+  tabChannel.onmessage = (ev) => {
+    const msg = ev && ev.data;
+    if (!msg || msg.type !== 'claim' || msg.tabId === TAB_ID) return;
+    if (S && !S.over && S.id === msg.gameId) {
+      S.tabLocked = true;
+      const ov = $('tab-lock-overlay');
+      if (ov) ov.hidden = false;
+    }
+  };
+}
+
+let toastTimer = null;
+function showToast(text, durationMs = 4200) {
+  const el = $('game-toast');
+  if (!el) return;
+  el.textContent = text;
+  el.hidden = false;
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, durationMs);
+}
+
+function b64ToBytes(b64) {
+  if (!b64) return new Uint8Array(0);
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i) & 0xff;
+  return out;
+}
+function concatReplayBytes(records, pendingKeys) {
+  const parts = [];
+  let total = 0;
+  for (const r of records || []) {
+    if (r && (r.k === 'turn' || r.k === 'tail') && r.keys) {
+      const b = b64ToBytes(r.keys);
+      if (b.length) { parts.push(b); total += b.length; }
+    }
+  }
+  if (Array.isArray(pendingKeys) && pendingKeys.length) {
+    const pb = Uint8Array.from(pendingKeys, (v) => v & 0xff);
+    parts.push(pb); total += pb.length;
+  }
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const p of parts) { out.set(p, off); off += p.length; }
+  return out;
+}
+
 /* ---------------- session state ---------------- */
-let S = null;            /* active session or null */
-let pendingImport = null; /* {name, bytes:Uint8Array} */
+let S = null; /* active session or null */
+let activeSessionToken = 0;
+let autoResumeAttempted = false;
+let localSaveTimer = null;
 
 function newSession(cfg) {
   return {
+    sid: cfg.sid,
     id: cfg.gameId, seed: cfg.seed, seedSource: cfg.seedSource,
     date: FIXED_DATE, options: cfg.options,
+    startedAt: cfg.startedAt || new Date().toISOString(),
+    parentGameId: cfg.parentGameId || null,
+    forkTurn: cfg.forkTurn != null ? cfg.forkTurn : null,
+    sessionId: (crypto.randomUUID ? crypto.randomUUID()
+      : ('ses-' + Date.now() + '-' + Math.random().toString(16).slice(2))),
     started: false, over: false, overStatus: null, exited: false,
+    tabLocked: false,
+    /* buffer fast-forward state */
+    buffering: !!cfg.buffering,
+    bufferMode: cfg.bufferMode || null, /* 'resume' | 'fork' */
+    bufferTargetTurns: cfg.bufferTargetTurns || 0,
+    bufferTotalBytes: cfg.bufferTotalBytes || 0,
+    bufferFedBytes: 0,
+    bufferExpectedHashes: cfg.bufferExpectedHashes || [],
+    bufferHashMismatch: false,
+    bufferReplayBytes: cfg.bufferReplayBytes || null,
+    bufferPumpStarted: false,
+    logBuffer: [],
+    lastTextEv: null,
     /* UI state derived from contract events */
     prompt: null,        /* {kind:'yn'|'line', q, choices, def} */
     menu: null,          /* last menu event */
@@ -249,9 +406,12 @@ function newSession(cfg) {
     lastFrame: null, statusLines: null,
     messages: [],
     counters: { more: 0, menu: 0, yn: 0, line: 0, dir: 0, text: 0, keys: 0 },
-    /* recorder */
+    /* recorder & sync */
     pendingKeys: [], records: [], recSeq: 0, keysTotal: 0, rngLines: 0,
-    uploadTimer: null, uploadChain: Promise.resolve(),
+    dirtyCloud: false, lastCloudTurns: cfg.baseCloudTurns || 0,
+    lastCloudSyncAt: 0, syncChain: Promise.resolve(),
+    cloudSyncStatus: '',
+    uploadOk: 0, uploadFailed: false,
     saves: [],
   };
 }
@@ -259,6 +419,7 @@ function newSession(cfg) {
 function uiMode() {
   if (!S) return 'boot';
   if (S.over) return 'over';
+  if (S.buffering) return 'boot';
   if (S.prompt && S.prompt.kind === 'line') return 'line';
   if (S.prompt && S.prompt.dirPrompt) return 'dirprompt';
   if (S.prompt && S.prompt.kind === 'yn' && S.prompt.choices == null) return 'objprompt';
@@ -291,12 +452,14 @@ function toggleMsgLog(open) {
 function toggleGameDrawer(open) {
   const el = $('game-drawer');
   if (!el) return;
-  el.hidden = !(open == null ? el.hidden : !!open);
+  const next = open == null ? el.hidden : !!open;
+  el.hidden = !next;
+  if (next) updateDrawerSyncBanner();
 }
 
 /* ---------------- the one input funnel ---------------- */
 function sendBytes(data) {
-  if (!S || S.over) return;
+  if (!S || S.over || S.buffering || S.tabLocked) return;
   /* auto-close message history drawer on any gameplay input */
   if ($('msglog-drawer') && !$('msglog-drawer').hidden) toggleMsgLog(false);
   const bytes = typeof data === 'string'
@@ -352,36 +515,51 @@ function handleEvent(json) {
   if (!S) return;
   let ev;
   try { ev = JSON.parse(json); } catch (e) { return; }
+  const fast = !!S.buffering;
   (S.eventTail = S.eventTail || []).push(ev.t);
   if (S.eventTail.length > 40) S.eventTail.shift();
-  /* a text window ends when its dmore dismissal key has been
-     consumed and the next event is not another text page; no map
-     event is guaranteed to follow (an "Unknown command" turn does
-     not dirty the map), so the close is resolved here */
   if (S.textClosePending && ev.t !== 'key') {
-    if (ev.t !== 'text') { S.textActive = false; hideOverlay(); }
+    if (ev.t !== 'text') { S.textActive = false; if (!fast) hideOverlay(); }
     S.textClosePending = false;
   }
   switch (ev.t) {
-    case 'init': S.started = true; break;
+    case 'init':
+      S.started = true;
+      if (S.buffering && !S.bufferPumpStarted) {
+        S.bufferPumpStarted = true;
+        pumpBuffer(S.sid);
+      }
+      break;
     case 'map': onMap(ev); break;
     case 'status':
       if (ev.lines && ev.lines.length) S.statusLines = ev.lines;
-      renderStatus();
+      if (!fast) renderStatus();
       break;
     case 'message':
       S.messages.push(ev.text);
-      renderMessages();
-      appendLog(ev.text);
+      if (S.messages.length > 300) S.messages.shift();
+      if (fast) {
+        S.logBuffer.push(ev.text);
+        if (S.logBuffer.length > 200) S.logBuffer.shift();
+      } else {
+        renderMessages();
+        appendLog(ev.text);
+      }
       break;
     case 'raw':
       S.messages.push(ev.text);
-      renderMessages();
-      appendLog('[!] ' + ev.text);
+      if (S.messages.length > 300) S.messages.shift();
+      if (fast) {
+        S.logBuffer.push('[!] ' + ev.text);
+        if (S.logBuffer.length > 200) S.logBuffer.shift();
+      } else {
+        renderMessages();
+        appendLog('[!] ' + ev.text);
+      }
       break;
     case 'more':
       S.moreActive = true; S.counters.more++;
-      renderMessages();
+      if (!fast) renderMessages();
       break;
     case 'prompt':
       if (ev.kind === 'yn' && ev.choices == null &&
@@ -391,54 +569,65 @@ function handleEvent(json) {
       }
       S.prompt = ev;
       if (ev.kind === 'yn') S.counters.yn++;
-      if (ev.kind === 'line') { S.counters.line++; showLineBar(ev.q); }
+      if (ev.kind === 'line') {
+        S.counters.line++;
+        if (!fast) showLineBar(ev.q);
+      }
       if (ev.q) {
         S.messages.push(ev.q);
-        renderMessages();
+        if (S.messages.length > 300) S.messages.shift();
+        if (!fast) renderMessages();
       }
       break;
     case 'prompt-end':
-      if (S.prompt && S.prompt.kind === 'line') hideLineBar();
+      if (S.prompt && S.prompt.kind === 'line' && !fast) hideLineBar();
       S.prompt = null;
       S.expectingDir = null;
       if (S.dirAfterLine) { S.expectingDir = '#'; S.dirAfterLine = false; }
       break;
     case 'menu':
       S.menu = ev; S.counters.menu++;
-      renderMenu(ev);
+      if (!fast) renderMenu(ev);
       break;
     case 'menu-end':
-      S.menu = null; hideOverlay();
+      S.menu = null;
+      if (!fast) hideOverlay();
       break;
     case 'text':
       S.textActive = true; S.counters.text++;
-      renderText(ev);
+      S.lastTextEv = ev;
+      if (!fast) renderText(ev);
       break;
     case 'getret': S.getretActive = true; break;
     case 'askname':
       S.prompt = { kind: 'line', q: '你的名字？' };
-      S.counters.line++; showLineBar('你的名字？');
+      S.counters.line++;
+      if (!fast) showLineBar('你的名字？');
       break;
     case 'rip':
       S.ripActive = true;
-      showOverlay('R.I.P.', null, 'rip');
+      if (!fast) showOverlay('R.I.P.', null, 'rip');
       break;
     case 'key':
       S.counters.keys++;
       if (ev.src === 'queue') {
         S.pendingKeys.push(ev.code & 0xff);
         S.keysTotal++;
+        if (!fast && !S.tabLocked && cloudActive()) {
+          S.dirtyCloud = true;
+          scheduleLocalSave();
+        }
       }
       if (S.moreActive) {
         if (S.textActive) S.textClosePending = true;
         S.moreActive = false;
-        renderMessages();
+        if (!fast) renderMessages();
       }
       if (S.getretActive) S.getretActive = false;
       break;
     case 'exit': S.exited = true; break;
   }
-  renderBar();
+  if (!fast) renderBar();
 }
 
 /* ---------------- map viewport: full 80x21 + mobile follow-@ zoom ---------------- */
@@ -457,8 +646,11 @@ function onMap(ev) {
     }
     S.heroPos = hero;
   }
-  if (S.textActive && !S.ripActive) { S.textActive = false; hideOverlay(); }
-  renderGrid();
+  if (S.textActive && !S.ripActive) {
+    S.textActive = false;
+    if (!S.buffering) hideOverlay();
+  }
+  if (!S.buffering) renderGrid();
 }
 
 function updateZoomButton() {
@@ -828,12 +1020,14 @@ function renderBar() {
   let padCenter = null;
 
   if (mode === 'over') {
-    ctxBtns = [
-      actBtn('回开局页', '', () => showSetup(), true),
-      actBtn('下载录制流', '.jsonl', () => $('btn-export-rec').click()),
-    ];
+    const turns = S.lastFrame ? S.lastFrame.turn : 0;
+    ctxBtns = [actBtn('回开局页', '', () => showSetup(), true)];
+    if (turns >= 2) {
+      const ft = Math.max(1, turns - 1);
+      ctxBtns.push(actBtn('死前分叉', `第 ${ft} 回合`, () => forkSessionAt(S, ft)));
+    }
   } else if (mode === 'boot') {
-    ctxBtns = [actBtn('游戏启动中…', '', () => { })];
+    ctxBtns = [actBtn(S.buffering ? '缓冲恢复中…' : '游戏启动中…', '', () => { })];
   } else if (mode === 'line') {
     ctxBtns = [
       actBtn('提交', 'Enter', () => submitLine(), true),
@@ -927,7 +1121,7 @@ function renderPanel(filter) {
 
 /* ---------------- physical keyboard: full passthrough ---------------- */
 document.addEventListener('keydown', (e) => {
-  if (!S || S.over || $('game').hidden) return;
+  if (!S || S.over || S.buffering || S.tabLocked || $('game').hidden) return;
   const t = e.target;
   if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' ||
             t.tagName === 'SELECT')) return;
@@ -963,7 +1157,7 @@ document.addEventListener('keydown', (e) => {
 
 /* map taps: adjacent = move/attack, hero = wait, far = travel (works in both full & zoomed view!) */
 $('grid').addEventListener('click', (e) => {
-  if (!S || S.over || !S.heroPos) return;
+  if (!S || S.over || S.buffering || S.tabLocked || !S.heroPos) return;
   const cell = e.target.closest('span[data-x]');
   if (!cell) return;
   const x = +cell.dataset.x, y = +cell.dataset.y;
@@ -1012,8 +1206,25 @@ function handleFrame(text) {
     keys: bytesToB64(S.pendingKeys),
   });
   S.pendingKeys = [];
+
+  if (S.buffering) {
+    const idx = f.frame != null ? f.frame : (S.records.length - 2);
+    const exp = S.bufferExpectedHashes && S.bufferExpectedHashes[idx];
+    if (exp && f.hash && exp !== f.hash) {
+      S.bufferHashMismatch = true;
+    }
+    return;
+  }
+
   renderStatus();
-  maybeFlush();
+  if (!S.tabLocked && cloudActive()) {
+    saveLocalSnapshot();
+    S.dirtyCloud = true;
+    const curTurns = f.turn || 0;
+    if (curTurns - (S.lastCloudTurns || 0) >= 50) {
+      syncActiveToCloud(false);
+    }
+  }
 }
 function bytesToB64(bytes) {
   let s = '';
@@ -1021,43 +1232,577 @@ function bytesToB64(bytes) {
   return btoa(s);
 }
 
-/* ---------------- recorder upload (unchanged S5/S6 contract) -------- */
-function maybeFlush() {
-  const pending = S.records.length - (S.flushedCount || 0);
-  if (pending >= 16) flushRecords(false);
+/* ---------------- active persistence: IndexedDB (every turn) + Cloud single-file ---------------- */
+function hasMeaningfulProgress(sess) {
+  if (!sess) return false;
+  return sess.keysTotal >= 1 || (sess.lastFrame && sess.lastFrame.turn >= 2);
 }
-function flushRecords(final) {
-  if (!S) return Promise.resolve();
-  const from = S.flushedCount || 0;
-  const batch = S.records.slice(from);
-  S.flushedCount = S.records.length;
-  if (!batch.length && !final) return Promise.resolve();
-  const payload = { gameId: S.id, seq: S.recSeq++, final: !!final, records: batch };
-  S.uploadChain = S.uploadChain.then(async () => {
-    try {
-      if (cloudActive()) {
-        await cloud.uploadChunk(payload);
-        S.cloudTransport = true;
-      } else {
-        const r = await fetch('./upload', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(payload),
+
+function buildActiveSnapshot(sess) {
+  const lf = sess.lastFrame || {};
+  return {
+    version: 1,
+    gameId: sess.id,
+    seed: sess.seed,
+    seedSource: sess.seedSource,
+    date: sess.date,
+    options: sess.options,
+    playerName: sess.playerName || 'fleck',
+    roleEn: sess.roleEn || 'valkyrie',
+    startedAt: sess.startedAt,
+    updatedAt: new Date().toISOString(),
+    sessionId: sess.sessionId,
+    parentGameId: sess.parentGameId || null,
+    forkTurn: sess.forkTurn != null ? sess.forkTurn : null,
+    turns: lf.turn || 0,
+    dlvl: lf.dlevel || 1,
+    hp: lf.hp != null ? lf.hp : null,
+    hpmax: lf.hpmax != null ? lf.hpmax : null,
+    keysTotal: sess.keysTotal || 0,
+    records: sess.records.slice(),
+    pendingKeys: sess.pendingKeys.slice(),
+  };
+}
+
+function scheduleLocalSave() {
+  if (localSaveTimer) clearTimeout(localSaveTimer);
+  localSaveTimer = setTimeout(() => {
+    localSaveTimer = null;
+    saveLocalSnapshot();
+  }, 250);
+}
+
+function saveLocalSnapshot() {
+  if (!S || S.over || S.buffering || S.tabLocked) return;
+  const user = cloud && cloud.currentUser();
+  if (!user || !hasMeaningfulProgress(S)) return;
+  const snap = buildActiveSnapshot(S);
+  idbPutGame(user.uid, snap);
+  try { sessionStorage.setItem('airstring_last_active_game', S.id); } catch (e) { }
+}
+
+function findCommonPrefixTurns(recordsA, recordsB) {
+  const turnsA = (recordsA || []).filter((r) => r && r.k === 'turn');
+  const turnsB = (recordsB || []).filter((r) => r && r.k === 'turn');
+  const n = Math.min(turnsA.length, turnsB.length);
+  let common = 0;
+  for (let i = 0; i < n; i++) {
+    if (turnsA[i].hash === turnsB[i].hash && turnsA[i].keys === turnsB[i].keys) {
+      common = turnsA[i].turn || (i + 1);
+    } else {
+      break;
+    }
+  }
+  return { common, lenA: turnsA.length, lenB: turnsB.length };
+}
+
+function updateSeedBanner() {
+  if (!S) return;
+  const forkNote = S.parentGameId
+    ? `\n分叉来源：${S.parentGameId}（第 ${S.forkTurn} 回合）` : '';
+  $('seed-banner').textContent = (S.seedSource === 'random'
+    ? `种子：随机（局终揭晓）`
+    : `种子：${S.seed}（${S.seedSource === 'fork' ? '分叉' : '指定'}）`) +
+    `\n日期固定 · 局 ID：${S.id}` + forkNote;
+}
+
+function updateDrawerSyncBanner() {
+  const box = $('drawer-auth-banner');
+  const btnFork = $('btn-fork-now');
+  const btnLeave = $('btn-newgame');
+  if (!box) return;
+  box.innerHTML = '';
+  const user = cloud && cloud.currentUser();
+  if (!user) {
+    box.className = 'drawer-sync-box is-guest';
+    const msg = document.createElement('div');
+    msg.textContent = '游客试玩中：刷新页面不会保存本局进度。现在登录 Google 即可自动认领并保存本局。';
+    box.appendChild(msg);
+    if (cloud && cloud.signIn) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = '登录 Google 并认领本局';
+      b.addEventListener('click', () => {
+        cloud.signIn().catch((e) => {
+          showToast('登录未完成：' + (e && e.message ? e.message : '请检查弹窗设置'));
         });
-        if (!r.ok) throw new Error('upload ' + r.status);
+      });
+      box.appendChild(b);
+    }
+    if (btnLeave) btnLeave.textContent = '返回开局页（游客局不保存）';
+  } else {
+    box.className = 'drawer-sync-box';
+    const statusText = S && S.cloudSyncStatus
+      ? S.cloudSyncStatus
+      : '已登录：每回合本地即时落盘，自动云端同步。';
+    const msg = document.createElement('div');
+    msg.textContent = statusText;
+    box.appendChild(msg);
+    if (btnLeave) btnLeave.textContent = '保存并返回开局页';
+  }
+  if (btnFork) {
+    const turns = S && S.lastFrame ? S.lastFrame.turn : 0;
+    btnFork.disabled = !S || S.over || S.buffering || turns < 1;
+    btnFork.textContent = turns >= 1
+      ? `从当前回合（第 ${turns} 回合）分叉新局`
+      : '从当前回合分叉新局';
+  }
+}
+
+function syncActiveToCloud(force) {
+  if (!S || S.over || S.buffering || S.tabLocked) return Promise.resolve();
+  const user = cloud && cloud.currentUser();
+  if (!user || !hasMeaningfulProgress(S)) return Promise.resolve();
+  if (!force && !S.dirtyCloud) return Promise.resolve();
+
+  const sess = S;
+  const uid = user.uid;
+  sess.dirtyCloud = false;
+
+  sess.syncChain = sess.syncChain.then(async () => {
+    if (!cloudActive() || cloud.currentUser().uid !== uid) return;
+    if (sess.over || sess.tabLocked) return;
+    let snap = buildActiveSnapshot(sess);
+    try {
+      /* Cross-device conflict check -> automatic in-place fork */
+      const remote = await cloud.loadActiveGame(sess.id);
+      if (remote && remote.sessionId && remote.sessionId !== sess.sessionId) {
+        const cmp = findCommonPrefixTurns(remote.records, snap.records);
+        const remoteBehindOrSame = cmp.lenA <= cmp.lenB && cmp.common === cmp.lenA;
+        if (!remoteBehindOrSame) {
+          const oldGameId = sess.id;
+          const newGameId = makeGameId(sess.seed);
+          const commonTurn = Math.max(0, cmp.common);
+          /* Keep remote copy locally under oldGameId so both timelines exist */
+          await idbPutGame(uid, remote);
+          /* Mutate current live session into forked timeline */
+          sess.id = newGameId;
+          sess.seedSource = 'fork';
+          sess.parentGameId = oldGameId;
+          sess.forkTurn = commonTurn;
+          if (sess.records[0] && sess.records[0].k === 'header') {
+            sess.records[0] = {
+              ...sess.records[0],
+              gameId: newGameId,
+              seedSource: 'fork',
+              parentGameId: oldGameId,
+              forkTurn: commonTurn,
+            };
+          }
+          snap = buildActiveSnapshot(sess);
+          await idbPutGame(uid, snap);
+          try { sessionStorage.setItem('airstring_last_active_game', newGameId); } catch (e) { }
+          broadcastTabClaim(newGameId);
+          updateSeedBanner();
+          showToast('检测到本局在另一设备推进，已自动将当前路线分叉保存为新局，两边进度均已保留！', 6000);
+        }
       }
-      S.uploadOk = (S.uploadOk || 0) + batch.length;
+      await cloud.saveActiveGame(snap);
+      sess.lastCloudTurns = snap.turns;
+      sess.lastCloudSyncAt = Date.now();
+      sess.uploadOk = (sess.uploadOk || 0) + 1;
+      sess.uploadFailed = false;
+      const tStr = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      sess.cloudSyncStatus = `已云端同步（第 ${snap.turns} 回合 · ${tStr}）`;
+      if ($('game-drawer') && !$('game-drawer').hidden) updateDrawerSyncBanner();
     } catch (e) {
-      S.uploadFailed = true;
+      sess.uploadFailed = true;
+      sess.dirtyCloud = true;
+      sess.cloudSyncStatus = '离线/云端暂不可达（本地已即时保存，联网后自动补同步）';
+      if ($('game-drawer') && !$('game-drawer').hidden) updateDrawerSyncBanner();
     }
   });
-  return S.uploadChain;
+  return sess.syncChain;
 }
-setInterval(() => { if (S && !S.over) flushRecords(false); }, 8000);
+
+setInterval(() => {
+  if (S && !S.over && !S.buffering && !S.tabLocked && S.dirtyCloud) {
+    syncActiveToCloud(false);
+  }
+}, 30000);
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && S && !S.over && !S.buffering && !S.tabLocked) {
+    saveLocalSnapshot();
+    syncActiveToCloud(true);
+  }
+});
+window.addEventListener('pagehide', () => {
+  if (S && !S.over && !S.buffering && !S.tabLocked) {
+    saveLocalSnapshot();
+    syncActiveToCloud(true);
+  }
+});
+window.addEventListener('online', () => {
+  if (S && !S.over && !S.buffering && !S.tabLocked && cloudActive()) {
+    syncActiveToCloud(true);
+  }
+});
 
 function recordingText() {
   const lines = S.records.map((r) => JSON.stringify(r));
   return lines.join('\n') + '\n';
+}
+
+/* ---------------- video-style Buffer Fast-Forward engine ---------------- */
+function updateBufferUi() {
+  if (!S || !S.buffering) return;
+  const curTurn = S.lastFrame ? (S.lastFrame.turn || 0) : 0;
+  const targetTurns = Math.max(1, S.bufferTargetTurns || 1);
+  const byteRatio = S.bufferTotalBytes > 0 ? (S.bufferFedBytes / S.bufferTotalBytes) : 1;
+  const turnRatio = Math.min(1, curTurn / targetTurns);
+  const pct = Math.min(99, Math.max(1, Math.round(Math.max(byteRatio, turnRatio) * 100)));
+  const fill = $('buffer-bar-fill');
+  if (fill) fill.style.width = pct + '%';
+  const det = $('buffer-detail');
+  if (det) {
+    det.textContent = `正在缓冲：${curTurn} / ${S.bufferTargetTurns || '?'} 回合（${pct}%）`;
+  }
+}
+
+function pumpBuffer(sid) {
+  if (!S || S.sid !== sid || !S.buffering) return;
+  const replayBytes = S.bufferReplayBytes;
+  if (!replayBytes || !replayBytes.length) {
+    finishBuffering(sid);
+    return;
+  }
+  let offset = 0;
+  const CHUNK = 48;
+
+  function step() {
+    if (!S || S.sid !== sid || !S.buffering) return;
+    if (S.over) {
+      finishBuffering(sid);
+      return;
+    }
+    const q = globalThis.__airstring_key_queue;
+    if (q && q.pos < q.bytes.length) {
+      updateBufferUi();
+      setTimeout(step, 4);
+      return;
+    }
+    if (offset < replayBytes.length) {
+      const end = Math.min(offset + CHUNK, replayBytes.length);
+      const slice = replayBytes.subarray(offset, end);
+      offset = end;
+      S.bufferFedBytes = offset;
+      globalThis.__airstring_push_keys(slice);
+      updateBufferUi();
+      setTimeout(step, 0);
+      return;
+    }
+    /* All bytes pushed and consumed by WASM; brief settle for final frame/map events */
+    setTimeout(() => {
+      if (!S || S.sid !== sid || !S.buffering) return;
+      const q2 = globalThis.__airstring_key_queue;
+      if (q2 && q2.pos < q2.bytes.length) {
+        setTimeout(step, 4);
+        return;
+      }
+      finishBuffering(sid);
+    }, 35);
+  }
+  step();
+}
+
+function finishBuffering(sid) {
+  if (!S || S.sid !== sid) return;
+  S.buffering = false;
+  S.bufferReplayBytes = null;
+  const fill = $('buffer-bar-fill');
+  if (fill) fill.style.width = '100%';
+  const ov = $('buffer-overlay');
+  if (ov) ov.hidden = true;
+
+  /* Hydrate msglog once from buffered messages */
+  const log = $('msglog');
+  if (log) {
+    log.innerHTML = '';
+    for (const line of S.logBuffer) {
+      const div = document.createElement('div');
+      div.textContent = line;
+      log.appendChild(div);
+    }
+  }
+  S.logBuffer = [];
+
+  renderMessages();
+  renderGrid();
+  renderStatus();
+  updateZoomButton();
+  renderBar();
+
+  /* Restore any active prompt/menu/text overlay */
+  if (S.prompt && S.prompt.kind === 'line') {
+    showLineBar(S.prompt.q);
+  } else if (S.menu) {
+    renderMenu(S.menu);
+  } else if (S.textActive && S.lastTextEv) {
+    renderText(S.lastTextEv);
+  } else if (S.ripActive) {
+    showOverlay('R.I.P.', null, 'rip');
+  }
+
+  updateDrawerSyncBanner();
+
+  if (S.bufferHashMismatch) {
+    showToast('缓冲恢复完成（检测到部分帧校验不一致，请确认构建版本）', 5000);
+  } else if (S.bufferMode === 'fork') {
+    showToast(`分叉完成：已从第 ${S.forkTurn} 回合开启新时间线`, 3500);
+    if (cloudActive()) {
+      saveLocalSnapshot();
+      syncActiveToCloud(true);
+    }
+  }
+}
+
+/* ---------------- setup active games list & auth sync ---------------- */
+function renderActiveGameCard(item, uid) {
+  const card = document.createElement('div');
+  card.className = 'active-game-item';
+  const roleZh = (ROLES[item.roleEn] && ROLES[item.roleEn].zh) || item.roleEn || '冒险者';
+
+  const top = document.createElement('div');
+  top.className = 'ag-top';
+  const title = document.createElement('span');
+  title.textContent = `${item.playerName || 'fleck'} · ${roleZh}`;
+  const badge = document.createElement('span');
+  badge.className = 'ag-badge' + (item.parentGameId ? ' fork' : '');
+  badge.textContent = item.parentGameId
+    ? `分叉 · T${item.turns || 0}`
+    : `进行中 · T${item.turns || 0}`;
+  top.append(title, badge);
+
+  const meta = document.createElement('div');
+  meta.className = 'ag-meta';
+  const hpStr = (item.hp != null && item.hpmax != null) ? `HP ${item.hp}/${item.hpmax}` : '';
+  const dlvlStr = item.dlvl ? `Dlvl:${item.dlvl}` : '';
+  const seedStr = item.seedSource === 'random' ? '种子:随机' : `种子:#${item.seed}`;
+  const when = item.updatedAt
+    ? new Date(item.updatedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+    : '';
+  meta.textContent = [dlvlStr, hpStr, seedStr, when].filter(Boolean).join(' · ');
+
+  const acts = document.createElement('div');
+  acts.className = 'ag-actions';
+
+  const bResume = document.createElement('button');
+  bResume.type = 'button';
+  bResume.className = 'primary';
+  bResume.textContent = '继续游玩';
+  bResume.addEventListener('click', () => resumeActiveGameById(uid, item.gameId, false));
+
+  const bFork = document.createElement('button');
+  bFork.type = 'button';
+  bFork.textContent = '分叉';
+  bFork.addEventListener('click', () => resumeActiveGameById(uid, item.gameId, true));
+
+  const bDel = document.createElement('button');
+  bDel.type = 'button';
+  bDel.className = 'danger';
+  bDel.textContent = '放弃';
+  bDel.addEventListener('click', async () => {
+    if (!confirm(`确定放弃「${item.playerName || 'fleck'} · ${roleZh}（第 ${item.turns || 0} 回合）」？放弃后将从进行中列表移除。`)) return;
+    await idbDeleteGame(uid, item.gameId);
+    try { await cloud.deleteActiveGame(item.gameId); } catch (e) { }
+    refreshActiveGames(true);
+  });
+
+  acts.append(bResume, bFork, bDel);
+  card.append(top, meta, acts);
+  return card;
+}
+
+async function refreshActiveGames(forceCloud = false) {
+  const guestBanner = $('guest-banner');
+  const activeCard = $('active-games-card');
+  const listEl = $('active-games-list');
+  const shelvedWrap = $('shelved-games-wrap');
+  const shelvedList = $('shelved-games-list');
+  const shelvedSum = $('shelved-games-summary');
+  const syncHint = $('active-sync-hint');
+
+  const user = cloud && cloud.currentUser();
+  if (!user) {
+    if (guestBanner) guestBanner.hidden = false;
+    if (activeCard) activeCard.hidden = true;
+    return;
+  }
+  if (guestBanner) guestBanner.hidden = true;
+  if (!activeCard || !listEl) return;
+
+  if (syncHint) syncHint.textContent = '同步中…';
+  const uid = user.uid;
+  const merged = new Map();
+
+  const localList = await idbListGames(uid);
+  for (const g of localList) {
+    if (g && g.gameId) merged.set(g.gameId, { ...g, _source: 'local' });
+  }
+  try {
+    const idx = await cloud.loadActiveIndex(forceCloud);
+    for (const [gid, meta] of Object.entries((idx && idx.games) || {})) {
+      if (!meta || !meta.gameId) continue;
+      const cur = merged.get(gid);
+      if (!cur || (meta.turns || 0) > (cur.turns || 0) ||
+          ((meta.turns || 0) === (cur.turns || 0) && String(meta.updatedAt || '') > String(cur.updatedAt || ''))) {
+        merged.set(gid, { ...meta, _source: 'cloud' });
+      }
+    }
+    if (syncHint) syncHint.textContent = '';
+  } catch (e) {
+    if (syncHint) syncHint.textContent = '云端暂不可达，已显示本机缓存';
+  }
+
+  const all = Array.from(merged.values()).sort((a, b) =>
+    String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+  if (!all.length) {
+    activeCard.hidden = true;
+    return;
+  }
+
+  activeCard.hidden = false;
+  listEl.innerHTML = '';
+  if (shelvedList) shelvedList.innerHTML = '';
+
+  const now = Date.now();
+  const recent = [];
+  const shelved = [];
+  for (const item of all) {
+    const ts = item.updatedAt ? Date.parse(item.updatedAt) : now;
+    if (now - ts > SHELVE_AGE_MS) shelved.push(item);
+    else recent.push(item);
+  }
+
+  for (const item of recent) listEl.appendChild(renderActiveGameCard(item, uid));
+  if (!recent.length) {
+    listEl.innerHTML = '<div class="hint">近期无进行中对局，下方可展开 30 天前已搁置的对局。</div>';
+  }
+  if (shelvedWrap && shelvedList && shelvedSum) {
+    shelvedWrap.hidden = shelved.length === 0;
+    shelvedSum.textContent = `已搁置对局（${shelved.length} 局 · 超过 30 天未操作，随时可续打或分叉）`;
+    for (const item of shelved) shelvedList.appendChild(renderActiveGameCard(item, uid));
+  }
+}
+
+async function loadBestSnapshot(uid, gameId) {
+  const local = await idbGetGame(uid, gameId);
+  let remote = null;
+  try {
+    if (cloudActive()) remote = await cloud.loadActiveGame(gameId);
+  } catch (e) { }
+  if (!local && !remote) return null;
+  if (local && !remote) return local;
+  if (!local && remote) return remote;
+  const lt = local.turns || 0;
+  const rt = remote.turns || 0;
+  if (rt > lt) return remote;
+  if (lt > rt) return local;
+  return String(remote.updatedAt || '') > String(local.updatedAt || '') ? remote : local;
+}
+
+async function resumeActiveGameById(uid, gameId, asFork) {
+  const snap = await loadBestSnapshot(uid, gameId);
+  if (!snap) {
+    alert('未找到该对局记录，可能已被清理。');
+    refreshActiveGames(true);
+    return;
+  }
+  const turns = (snap.records || []).filter((r) => r && r.k === 'turn');
+  const expectedHashes = turns.map((t) => t.hash);
+  const replayBytes = asFork
+    ? concatReplayBytes(turns, null)
+    : concatReplayBytes(snap.records, snap.pendingKeys);
+  const expectedTurns = turns.length ? (turns[turns.length - 1].turn || turns.length) : 0;
+
+  if (asFork) {
+    await startGame({
+      mode: 'fork',
+      seed: snap.seed,
+      seedSource: 'fork',
+      options: snap.options,
+      parentGameId: snap.gameId,
+      forkTurn: expectedTurns,
+      replayBytes,
+      expectedTurns,
+      expectedHashes,
+    });
+  } else {
+    await startGame({
+      mode: 'resume',
+      gameId: snap.gameId,
+      seed: snap.seed,
+      seedSource: snap.seedSource || 'given',
+      options: snap.options,
+      startedAt: snap.startedAt,
+      parentGameId: snap.parentGameId || null,
+      forkTurn: snap.forkTurn != null ? snap.forkTurn : null,
+      baseCloudTurns: snap.turns || 0,
+      replayBytes,
+      expectedTurns,
+      expectedHashes,
+    });
+  }
+}
+
+async function forkSessionAt(sess, targetTurn) {
+  if (!sess) return;
+  const allTurns = (sess.records || []).filter((r) => r && r.k === 'turn');
+  const sliced = targetTurn != null
+    ? allTurns.filter((t) => (t.turn || 0) <= targetTurn)
+    : allTurns;
+  const forkTurn = sliced.length ? (sliced[sliced.length - 1].turn || sliced.length) : 0;
+  const replayBytes = concatReplayBytes(sliced, null);
+  const expectedHashes = sliced.map((t) => t.hash);
+  await startGame({
+    mode: 'fork',
+    seed: sess.seed,
+    seedSource: 'fork',
+    options: sess.options,
+    parentGameId: sess.id,
+    forkTurn,
+    replayBytes,
+    expectedTurns: forkTurn,
+    expectedHashes,
+  });
+}
+
+async function onAuthChanged(user) {
+  /* Update setup screen guest banner & active list */
+  if ($('setup') && !$('setup').hidden) {
+    await refreshActiveGames(true);
+  }
+  /* Update drawer if currently in game */
+  if (S) {
+    updateDrawerSyncBanner();
+    if (user && !S.over && !S.buffering && !S.tabLocked) {
+      /* Mid-game guest login claim: seamlessly bind current run to signed-in user */
+      if (hasMeaningfulProgress(S)) {
+        saveLocalSnapshot();
+        S.dirtyCloud = true;
+        syncActiveToCloud(true);
+        showToast('已登录！当前试玩进度已自动认领并保存至你的账号。', 4500);
+      } else {
+        showToast('已登录，开始行动后将自动保存进度。', 3000);
+      }
+    }
+    return;
+  }
+  /* Auto-resume exact game on browser F5 refresh for signed-in user */
+  if (user && !autoResumeAttempted) {
+    autoResumeAttempted = true;
+    let lastId = null;
+    try { lastId = sessionStorage.getItem('airstring_last_active_game'); } catch (e) { }
+    if (lastId) {
+      const snap = await loadBestSnapshot(user.uid, lastId);
+      if (snap && ((snap.turns || 0) >= 1 || (snap.keysTotal || 0) >= 1)) {
+        resumeActiveGameById(user.uid, lastId, false);
+      } else {
+        try { sessionStorage.removeItem('airstring_last_active_game'); } catch (e) { }
+      }
+    }
+  }
 }
 
 /* ---------------- game lifecycle ---------------- */
@@ -1066,53 +1811,125 @@ function randomSeed64() {
   crypto.getRandomValues(a);
   return ((BigInt(a[0]) << 32n) | BigInt(a[1])).toString(10);
 }
-
-async function startGame() {
-  const name = $('opt-name').value.trim() || 'fleck';
-  const role = $('opt-role').value;
-  const race = $('opt-race').value;
-  const gender = $('opt-gender').value;
-  const align = $('opt-align').value;
-  const seedMode = document.querySelector('input[name="seedmode"]:checked').value;
-  let seed, seedSource;
-  if (seedMode === 'given') {
-    seed = $('seed-input').value.trim();
-    if (!/^\d+$/.test(seed) || BigInt(seed) >= (1n << 64n)) {
-      alert('种子须为 0 – 2^64-1 的整数');
-      return;
-    }
-    seedSource = 'given';
-  } else {
-    seed = randomSeed64();
-    seedSource = 'random';
-  }
-  const options =
-    `name:${name},role:${role},race:${race},gender:${gender},align:${align}`;
-  const gameId = 'g-' + seed + '-' +
+function makeGameId(seed) {
+  return 'g-' + seed + '-' +
     new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14) + '-' +
     Math.floor(Math.random() * 0xffff).toString(16).padStart(4, '0');
+}
 
-  S = newSession({ gameId, seed, seedSource, options });
-  S.playerName = name; S.roleEn = role;
-  S.records.push({
-    k: 'header', gameId, seed, seedSource, date: FIXED_DATE, options,
-    startedAt: new Date().toISOString(), ua: navigator.userAgent,
-    restored: pendingImport ? pendingImport.name : null,
+function teardownCurrentSession() {
+  activeSessionToken++;
+  if (localSaveTimer) { clearTimeout(localSaveTimer); localSaveTimer = null; }
+  if (typeof globalThis.__airstring_close_keys === 'function') {
+    try { globalThis.__airstring_close_keys(); } catch (e) { }
+  }
+}
+
+async function startGame(plan) {
+  let name, role, race, gender, align, seed, seedSource, options, gameId;
+  let startedAt = new Date().toISOString();
+  let parentGameId = null, forkTurn = null, baseCloudTurns = 0;
+
+  if (plan) {
+    options = plan.options;
+    const optMap = parseOptionMap(options);
+    name = optMap.name || 'fleck';
+    role = optMap.role || 'valkyrie';
+    seed = String(plan.seed);
+    seedSource = plan.seedSource || 'given';
+    gameId = plan.mode === 'resume' && plan.gameId ? plan.gameId : makeGameId(seed);
+    startedAt = plan.startedAt || startedAt;
+    parentGameId = plan.parentGameId || null;
+    forkTurn = plan.forkTurn != null ? plan.forkTurn : null;
+    baseCloudTurns = plan.baseCloudTurns || 0;
+  } else {
+    /* Soft cap check for fresh games when signed in */
+    const user = cloud && cloud.currentUser();
+    if (user) {
+      try {
+        const localGames = await idbListGames(user.uid);
+        if (localGames.length >= MAX_ACTIVE_SOFT_CAP) {
+          alert(`当前已有 ${localGames.length} 局进行中对局，请先放弃部分旧对局再开新局。`);
+          return;
+        }
+      } catch (e) { }
+    }
+    name = $('opt-name').value.trim() || 'fleck';
+    role = $('opt-role').value;
+    race = $('opt-race').value;
+    gender = $('opt-gender').value;
+    align = $('opt-align').value;
+    const seedMode = document.querySelector('input[name="seedmode"]:checked').value;
+    if (seedMode === 'given') {
+      seed = $('seed-input').value.trim();
+      if (!/^\d+$/.test(seed) || BigInt(seed) >= (1n << 64n)) {
+        alert('种子须为 0 – 2^64-1 的整数');
+        return;
+      }
+      seedSource = 'given';
+    } else {
+      seed = randomSeed64();
+      seedSource = 'random';
+    }
+    options = `name:${name},role:${role},race:${race},gender:${gender},align:${align}`;
+    gameId = makeGameId(seed);
+  }
+
+  teardownCurrentSession();
+  const sid = activeSessionToken;
+  const hasBuffer = !!(plan && plan.replayBytes && plan.replayBytes.length > 0);
+
+  S = newSession({
+    sid, gameId, seed, seedSource, options, startedAt,
+    parentGameId, forkTurn, baseCloudTurns,
+    buffering: hasBuffer,
+    bufferMode: plan ? plan.mode : null,
+    bufferTargetTurns: plan ? (plan.expectedTurns || 0) : 0,
+    bufferTotalBytes: hasBuffer ? plan.replayBytes.length : 0,
+    bufferExpectedHashes: plan ? (plan.expectedHashes || []) : [],
+    bufferReplayBytes: hasBuffer ? plan.replayBytes : null,
   });
+  S.playerName = name; S.roleEn = role;
+
+  const headerRec = {
+    k: 'header', gameId, seed, seedSource, date: FIXED_DATE, options,
+    startedAt, ua: navigator.userAgent, restored: null,
+  };
+  if (parentGameId) {
+    headerRec.parentGameId = parentGameId;
+    headerRec.forkTurn = forkTurn != null ? forkTurn : 0;
+  }
+  S.records.push(headerRec);
+
+  broadcastTabClaim(gameId);
+  if (cloudActive()) {
+    try { sessionStorage.setItem('airstring_last_active_game', gameId); } catch (e) { }
+  }
 
   document.body.classList.add('in-game');
   $('setup').hidden = true;
   $('game').hidden = false;
   $('gameover').hidden = true;
+  $('tab-lock-overlay').hidden = true;
   $('grid').innerHTML = '';
   lastGridDims = '';
   $('msglog').innerHTML = '';
-  $('saves-box').innerHTML = '';
   hideOverlay(); hideLineBar(); togglePanel(false);
   toggleMsgLog(false); toggleGameDrawer(false);
-  $('seed-banner').textContent = seedSource === 'given'
-    ? `种子：${seed}（指定）\n日期固定 · 局 ID：${gameId}`
-    : `种子：随机（局终揭晓）\n日期固定 · 局 ID：${gameId}`;
+  updateSeedBanner();
+  updateDrawerSyncBanner();
+
+  const bufOv = $('buffer-overlay');
+  if (bufOv) {
+    bufOv.hidden = !hasBuffer;
+    if (hasBuffer) {
+      $('buffer-title').textContent = plan.mode === 'fork'
+        ? `正在分叉至第 ${forkTurn} 回合…` : '正在缓冲恢复对局…';
+      $('buffer-bar-fill').style.width = '2%';
+      $('buffer-detail').textContent = `准备引擎（目标 ${plan.expectedTurns || '?'} 回合）…`;
+    }
+  }
+
   renderMessages();
   renderStatus();
   updateZoomButton();
@@ -1123,75 +1940,73 @@ async function startGame() {
     exportPath: '/fleck.frames', rngPath: '/fleck.rng',
   };
   globalThis.__airstring_key_queue = { bytes: [], pos: 0, closed: false };
-  globalThis.__airstring_event = (json) => handleEvent(json);
-  globalThis.__airstring_frame = (text) => handleFrame(text);
-  globalThis.__airstring_rngline = () => { if (S) S.rngLines++; };
-  globalThis.__airstring_game_over = (status) => handleGameOver(status);
+  globalThis.__airstring_event = (json) => { if (S && S.sid === sid) handleEvent(json); };
+  globalThis.__airstring_frame = (text) => { if (S && S.sid === sid) handleFrame(text); };
+  globalThis.__airstring_rngline = () => { if (S && S.sid === sid) S.rngLines++; };
+  globalThis.__airstring_game_over = (status) => { if (S && S.sid === sid) handleGameOver(status); };
 
   const modArg = {
-    print: (s) => appendLog('[out] ' + s),
-    printErr: (s) => appendLog('[err] ' + s),
+    print: (s) => { if (S && S.sid === sid && !S.buffering) appendLog('[out] ' + s); },
+    printErr: (s) => { if (S && S.sid === sid && !S.buffering) appendLog('[err] ' + s); },
   };
-  if (pendingImport) {
-    const imp = pendingImport;
-    modArg.preRun = [function () {
-      try { modArg.FS.mkdir('/save'); } catch (e) { /* exists */ }
-      try {
-        modArg.FS.writeFile('/save/' + imp.name, imp.bytes);
-        appendLog('已写入导入存档 /save/' + imp.name +
-          '（' + imp.bytes.length + ' B）');
-      } catch (e) {
-        appendLog('导入存档写入失败：' + (e.errno || '') + ' ' +
-          (e.message || String(e)));
-      }
-    }];
-  }
   try {
     const { default: createModule } = await import('./nethack.js');
-    S.module = await createModule(modArg);
+    const mod = await createModule(modArg);
+    if (S && S.sid === sid) S.module = mod;
   } catch (e) {
-    appendLog('模块启动异常：' + (e && e.message ? e.message : e));
+    if (S && S.sid === sid) {
+      if (S.buffering) finishBuffering(sid);
+      appendLog('模块启动异常：' + (e && e.message ? e.message : e));
+    }
   }
 }
 
 function handleGameOver(status) {
   if (!S || S.over) return;
+  if (S.buffering) finishBuffering(S.sid);
   S.over = true; S.overStatus = status;
+  try { sessionStorage.removeItem('airstring_last_active_game'); } catch (e) { }
+
   if (S.pendingKeys.length) {
     S.records.push({ k: 'tail', keys: bytesToB64(S.pendingKeys) });
     S.pendingKeys = [];
   }
-  S.records.push({
-    k: 'end', status, turns: S.lastFrame ? S.lastFrame.turn : 0,
-    frames: S.lastFrame ? S.lastFrame.frame + 1 : 0, keysTotal: S.keysTotal,
-  });
-  flushRecords(true);
+  const turns = S.lastFrame ? S.lastFrame.turn : 0;
+  const frames = S.lastFrame ? S.lastFrame.frame + 1 : 0;
+  S.records.push({ k: 'end', status, turns, frames, keysTotal: S.keysTotal });
+
   const useCloud = cloudActive();
+  const user = cloud && cloud.currentUser();
+  if (user) {
+    idbDeleteGame(user.uid, S.id);
+  }
   if (useCloud) {
     const endRec = S.records[S.records.length - 1];
-    const header = S.records[0];
-    S.uploadChain = S.uploadChain.then(async () => {
+    const sess = S;
+    sess.syncChain = sess.syncChain.then(async () => {
       try {
         await cloud.finalizeGame({
-          gameId: S.id, seed: S.seed, seedSource: S.seedSource,
-          date: S.date, options: S.options,
-          restored: header && header.k === 'header'
-            ? header.restored : null,
+          gameId: sess.id, seed: sess.seed, seedSource: sess.seedSource,
+          date: sess.date, options: sess.options,
+          parentGameId: sess.parentGameId || null,
+          forkTurn: sess.forkTurn != null ? sess.forkTurn : null,
+          restored: null,
           end: status, turns: endRec.turns, frames: endRec.frames,
           keysTotal: endRec.keysTotal,
           recordingText: recordingText(),
         });
-      } catch (e) { S.uploadFailed = true; }
+      } catch (e) { sess.uploadFailed = true; }
     });
   }
+
   const go = $('gameover');
   go.hidden = false;
   go.innerHTML = '';
   go.append(document.createTextNode(
-    `本局结束（status ${status}）。录制流 ${S.records.length} 条记录` +
-    (S.uploadFailed ? '（上传不可达，已保留在页面内存，可下载）'
-     : useCloud ? '，已上云（Storage＋Firestore，自动触发验真中）'
-                : '，已分块上传至本地桩') + '。'));
+    `本局结束（共 ${turns} 回合）。` +
+    (useCloud
+      ? '已自动归档上云（Storage＋Firestore），正在触发后台验真。'
+      : '游客试玩局未上云；登录 Google 后每局均可自动保存、验真并入榜。')));
   if (S.seedSource === 'random') {
     const d = document.createElement('div');
     d.className = 'seed';
@@ -1203,65 +2018,48 @@ function handleGameOver(status) {
   const bNew = document.createElement('button');
   bNew.type = 'button'; bNew.className = 'primary'; bNew.textContent = '返回开局页';
   bNew.addEventListener('click', showSetup);
-  const bRec = document.createElement('button');
-  bRec.type = 'button'; bRec.textContent = '下载录制流';
-  bRec.addEventListener('click', () => $('btn-export-rec').click());
-  acts.append(bNew, bRec);
+  acts.appendChild(bNew);
+
+  if (turns >= 2) {
+    const ft = Math.max(1, turns - 1);
+    const bFork = document.createElement('button');
+    bFork.type = 'button';
+    bFork.textContent = `从死前（第 ${ft} 回合）分叉再试`;
+    bFork.addEventListener('click', () => forkSessionAt(S, ft));
+    acts.appendChild(bFork);
+  }
   go.appendChild(acts);
 
-  refreshSaves();
   updateZoomButton();
   renderBar();
 }
 
-function refreshSaves() {
-  const box = $('saves-box');
-  box.innerHTML = '';
-  let saves = [];
-  try { saves = globalThis.__airstring_list_saves() || []; } catch (e) { }
-  S.saves = saves.filter((n) => n !== '.keep');
-  for (const name of S.saves) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.textContent = '导出存档 ' + name;
-    b.addEventListener('click', () => {
-      const bytes = globalThis.__airstring_read_save(name);
-      const blob = new Blob([bytes], { type: 'application/octet-stream' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = name;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    });
-    box.appendChild(b);
+async function showSetup() {
+  if (S && !S.over && !S.buffering && !S.tabLocked && cloudActive()) {
+    saveLocalSnapshot();
+    syncActiveToCloud(true);
   }
-}
-
-function showSetup() {
+  try { sessionStorage.removeItem('airstring_last_active_game'); } catch (e) { }
+  teardownCurrentSession();
   if (document.fullscreenElement && document.exitFullscreen) {
     document.exitFullscreen().catch(() => { });
   }
   document.body.classList.remove('in-game');
   toggleGameDrawer(false);
   toggleMsgLog(false);
+  $('buffer-overlay').hidden = true;
+  $('tab-lock-overlay').hidden = true;
   $('game').hidden = true;
   $('setup').hidden = false;
   S = null;
+  refreshActiveGames(false);
   loadVerifiedLobby();
 }
 
 /* ---------------- wiring ---------------- */
 $('setup-form').addEventListener('submit', (e) => {
   e.preventDefault();
-  startGame();
-});
-$('import-file').addEventListener('change', async (e) => {
-  const f = e.target.files[0];
-  if (!f) { pendingImport = null; $('import-info').textContent = ''; return; }
-  const buf = new Uint8Array(await f.arrayBuffer());
-  pendingImport = { name: f.name, bytes: buf };
-  $('import-info').textContent =
-    `已选择存档 ${f.name}（${buf.length} B），开局将恢复`;
+  startGame(null);
 });
 $('line-send').addEventListener('click', submitLine);
 $('line-cancel').addEventListener('click', () => sendBytes([27]));
@@ -1273,16 +2071,44 @@ $('btn-commands').addEventListener('click', () =>
   togglePanel($('panel').hidden));
 $('panel-close').addEventListener('click', () => togglePanel(false));
 $('panel-search').addEventListener('input', (e) => renderPanel(e.target.value));
-$('btn-export-rec').addEventListener('click', () => {
-  if (!S) return;
-  const blob = new Blob([recordingText()], { type: 'application/json' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = S.id + '.jsonl';
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+$('btn-fork-now').addEventListener('click', () => {
+  if (!S || S.over || S.buffering) return;
+  const t = S.lastFrame ? S.lastFrame.turn : 0;
+  if (t < 1) return;
+  toggleGameDrawer(false);
+  forkSessionAt(S, t);
 });
-$('btn-newgame').addEventListener('click', showSetup);
+$('btn-newgame').addEventListener('click', () => showSetup());
+
+/* Multi-tab lock actions */
+$('btn-tab-back').addEventListener('click', () => showSetup());
+$('btn-tab-reclaim').addEventListener('click', async () => {
+  if (!S) return;
+  const gid = S.id;
+  const user = cloud && cloud.currentUser();
+  S.tabLocked = false;
+  $('tab-lock-overlay').hidden = true;
+  broadcastTabClaim(gid);
+  if (user) {
+    const latest = await loadBestSnapshot(user.uid, gid);
+    const curTurns = S.lastFrame ? (S.lastFrame.turn || 0) : 0;
+    if (latest && (latest.turns || 0) > curTurns) {
+      resumeActiveGameById(user.uid, gid, false);
+    }
+  }
+});
+
+/* Guest sign-in & active list refresh */
+$('btn-guest-signin').addEventListener('click', () => {
+  if (cloud && cloud.signIn) {
+    cloud.signIn().catch((e) => {
+      alert('Google 登录未完成：' + (e && e.message ? e.message : '请检查浏览器弹窗拦截或域名授权'));
+    });
+  } else {
+    alert('当前环境未连接 Firebase 登录服务。');
+  }
+});
+$('btn-refresh-active').addEventListener('click', () => refreshActiveGames(true));
 
 /* Phase 1 UI controls */
 $('msg-wrap').addEventListener('click', () => toggleMsgLog());
@@ -1334,15 +2160,22 @@ document.addEventListener('click', (e) => {
 fillSetupForm();
 renderBar();
 loadVerifiedLobby();
+if (cloud && cloud.onUserChange) {
+  cloud.onUserChange((u) => onAuthChanged(u));
+} else {
+  if ($('guest-banner')) $('guest-banner').hidden = false;
+}
 
 /* read-only test/inspection hook (used by the S5 gate driver) */
 window.__airstring_debug = {
   state: () => S ? {
     gameId: S.id, started: S.started, over: S.over,
     overStatus: S.overStatus, mode: uiMode(),
+    buffering: !!S.buffering, tabLocked: !!S.tabLocked,
+    parentGameId: S.parentGameId, forkTurn: S.forkTurn,
     counters: { ...S.counters }, keysTotal: S.keysTotal,
     lastFrame: S.lastFrame, underHero: S.underHero,
-    heroPos: S.heroPos, saves: S.saves, records: S.records.length,
+    heroPos: S.heroPos, records: S.records.length,
     uploadOk: S.uploadOk || 0, uploadFailed: !!S.uploadFailed,
     prompt: S.prompt, seed: S.seed, seedSource: S.seedSource,
     eventTail: S.eventTail || [],
@@ -1350,3 +2183,4 @@ window.__airstring_debug = {
   } : null,
   records: () => (S ? S.records : []),
 };
+
