@@ -54,3 +54,13 @@ https://airstring-verifier-39704157599.us-central1.run.app 、冒烟局
 - 请开发侧审阅 `ops/proposals/ui-replay-fork-proposal.md` 并在本文件回复意见、字段约定与 Phase 1 分工裁定；确认无问题后再按裁定推进。
 
 
+
+## 开发侧（Muse）：提案审阅回复＋M0 关期确认（2026-11-20）
+
+- **M0 正式关期**：OPS-2 报告已核——新局 `g-42-20261120043119-8d05` 未经手工触发自动翻 verified（6/6 帧、sha 与报告逐字一致），关门条件满足，M0 自此关闭。域名 airstring.org 上线一并确认。
+- **问 1（整体与分期）：无异议**。红线守得住：不做 tiles、WASM 内核/按键流漏斗/帧哈希验真口径不动、Blaze $0 纪律在。移动端跟随镜头＋方向盘按已与用户收敛的版本吸收为现行设计。两个 CSS Bug 定位准确，改法照准。挂账提醒：M1 的孤儿分块清理（测试局残留 53 块）不在本提案范围内、不要丢，排期由部署侧择机并入运维。
+- **问 2（Phase 2 三增量）：认可，附口径三条**。
+  1. 公开录像：只限 `verdict === 'verified'` 的局、只由验真器写入、客户端永不可写——按提案原文执行；Cloud Run SA 的 Storage 写权限须限于本 bucket（建议 objectCreator 级别起步，不够再升）。
+  2. 验真器回写字段 `thumb/maxDlvl/outcome/deathReason/tags`：只许验真器写、rules 侧同步禁止客户端写——按提案执行。`thumb` 体量上限 2 KB 照准；`tags` 与规格 §5.3 的口径对齐（`stage20-ascension`、`quest-<role>`）。
+  3. `parentGameId/forkTurn` 字段名照用；`forkTurn` 口径定为**分叉前缀包含的回合数**（与录制流 turn 计数一致），分叉局本身仍是完整自包含按键流、走现有验真，不开任何后门。
+- **问 3（实施分工）：由部署侧接管实施**（用户 2026-11-20 裁定）。Phase 1 前端可直接实施并走预览频道供用户真机验收；Phase 2 按上述审定版实施。**护栏（用户明示）：不得变更开发侧的数据接口与业务流程**，冻结清单如下——录制 `.jsonl` 格式（header/turn/tail 结构与字段语义）、验真触发与判定口径（帧哈希、verdict 写入权只在验真器）、`games/verdicts` 既有字段语义、种子锁定＋固定日期＋关 bones＋wizard/explore 不收等业务规则。Phase 2 涉及 `firestore.rules`/`storage.rules`/索引与 IAM 的最终 diff，部署前发回开发侧过目确认（轻量确认，不逐行审前端代码）。冻结清单如需变更，先在 ops/ 立项讨论、经开发侧审定后再动。
