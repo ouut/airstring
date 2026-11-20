@@ -25,7 +25,7 @@ import { COMMANDS, DIRS, dirByte } from './commands.js';
  * In every other case `cloud` is null (or reports no user) and the
  * upload path below is the S5 local-stub behaviour, unchanged. */
 let cloud = null;
-try { cloud = (await import('./firebase.js?v=p2fix2')).default; }
+try { cloud = (await import('./firebase.js?v=p2fix3')).default; }
 catch (e) { cloud = null; }
 function cloudActive() { return !!(cloud && cloud.currentUser()); }
 
@@ -70,7 +70,7 @@ function fillSetupForm() {
 
     if (lobbyRoleSel) {
       const fo = document.createElement('option');
-      fo.value = k; fo.textContent = v.zh + ' · ' + k;
+      fo.value = k; fo.textContent = v.zh;
       lobbyRoleSel.appendChild(fo);
     }
 
@@ -2136,6 +2136,7 @@ async function showMyGames(forceCloud = true) {
   $('tab-lock-overlay').hidden = true;
   $('game').hidden = true;
   $('setup').hidden = true;
+  if ($('newgame')) $('newgame').hidden = true;
   if ($('replay')) $('replay').hidden = true;
   if ($('mygames')) $('mygames').hidden = false;
   setTopNavActive('mygames');
@@ -2289,7 +2290,7 @@ async function onAuthChanged(user) {
     return;
   }
   /* Auto-resume exact game on browser F5 refresh for signed-in user */
-  if (user && !autoResumeAttempted && !location.hash.startsWith('#replay/') && location.hash !== '#mygames') {
+  if (user && !autoResumeAttempted && !location.hash.startsWith('#replay/') && location.hash !== '#mygames' && location.hash !== '#new') {
     autoResumeAttempted = true;
     let lastId = null;
     try { lastId = sessionStorage.getItem('airstring_last_active_game'); } catch (e) { }
@@ -2409,7 +2410,8 @@ async function startGame(plan) {
   R = null;
   if ($('replay')) $('replay').hidden = true;
   if ($('mygames')) $('mygames').hidden = true;
-  if (location.hash === '#mygames' || location.hash.startsWith('#replay/')) {
+  if ($('newgame')) $('newgame').hidden = true;
+  if (location.hash === '#mygames' || location.hash === '#new' || location.hash.startsWith('#replay/')) {
     try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { }
   }
   document.body.classList.add('in-game');
@@ -2540,12 +2542,15 @@ function handleGameOver(status) {
   renderBar();
 }
 
+let newGameFromPage = 'setup';
+
 async function showSetup() {
   stopReplayPlayback();
   R = null;
   if ($('replay')) $('replay').hidden = true;
   if ($('mygames')) $('mygames').hidden = true;
-  if (location.hash && (location.hash.startsWith('#replay/') || location.hash === '#mygames')) {
+  if ($('newgame')) $('newgame').hidden = true;
+  if (location.hash && (location.hash.startsWith('#replay/') || location.hash === '#mygames' || location.hash === '#new')) {
     try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { }
   }
   if (S && !S.over && !S.buffering && !S.tabLocked && cloudActive()) {
@@ -2568,6 +2573,49 @@ async function showSetup() {
   S = null;
   refreshActiveGames(true);
   loadVerifiedLobby();
+}
+
+async function showNewGame(prefill = null, fromPage = 'setup') {
+  newGameFromPage = fromPage || 'setup';
+  stopReplayPlayback();
+  R = null;
+  if (S && !S.over && !S.buffering && !S.tabLocked && cloudActive()) {
+    saveLocalSnapshot();
+    await Promise.race([syncActiveToCloud(true), new Promise((r) => setTimeout(r, 2000))]);
+  }
+  try { sessionStorage.removeItem('airstring_last_active_game'); } catch (e) { }
+  teardownCurrentSession();
+  S = null;
+  if (document.fullscreenElement && document.exitFullscreen) {
+    document.exitFullscreen().catch(() => { });
+  }
+  document.body.classList.remove('in-game');
+  toggleGameDrawer(false);
+  toggleMsgLog(false);
+  $('buffer-overlay').hidden = true;
+  $('tab-lock-overlay').hidden = true;
+  $('game').hidden = true;
+  $('setup').hidden = true;
+  if ($('replay')) $('replay').hidden = true;
+  if ($('mygames')) $('mygames').hidden = true;
+  if ($('newgame')) $('newgame').hidden = false;
+  const backBtn = $('btn-newgame-back');
+  if (backBtn) backBtn.textContent = newGameFromPage === 'mygames' ? '← 返回对局' : '← 返回大厅';
+  setTopNavActive('');
+  try { history.replaceState(null, '', '#new'); } catch (e) { }
+
+  if (prefill) {
+    if (prefill.seed != null && /^\d+$/.test(String(prefill.seed))) {
+      const givenRadio = document.querySelector('input[name="seedmode"][value="given"]');
+      if (givenRadio) givenRadio.checked = true;
+      $('seed-input').value = String(prefill.seed);
+    }
+    if (prefill.roleKey && ROLES[prefill.roleKey]) {
+      $('opt-role').value = prefill.roleKey;
+      $('opt-role').dispatchEvent(new Event('change'));
+    }
+  }
+  window.scrollTo({ top: 0, behavior: 'instant' });
 }
 
 /* ---------------- wiring ---------------- */
@@ -2683,10 +2731,13 @@ if ($('lobby-sort')) {
 if ($('lobby-search')) {
   $('lobby-search').addEventListener('input', () => renderVerifiedGallery());
 }
-if ($('btn-scroll-newgame')) {
-  $('btn-scroll-newgame').addEventListener('click', () => {
-    const target = $('enter-dungeon') || $('start-btn');
-    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+if ($('btn-open-newgame')) {
+  $('btn-open-newgame').addEventListener('click', () => showNewGame(null, 'setup'));
+}
+if ($('btn-newgame-back')) {
+  $('btn-newgame-back').addEventListener('click', () => {
+    if (newGameFromPage === 'mygames') showMyGames(false);
+    else showSetup();
   });
 }
 
@@ -2709,6 +2760,7 @@ function closeReplay(goBack = true) {
     R = null;
   }
   if ($('replay')) $('replay').hidden = true;
+  if ($('newgame')) $('newgame').hidden = true;
   if (location.hash && location.hash.startsWith('#replay/')) {
     try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { }
   }
@@ -2718,6 +2770,7 @@ function closeReplay(goBack = true) {
     } else {
       $('game').hidden = true;
       if ($('mygames')) $('mygames').hidden = true;
+      if ($('newgame')) $('newgame').hidden = true;
       $('setup').hidden = false;
       setTopNavActive('setup');
       document.body.classList.remove('in-game');
@@ -3012,6 +3065,7 @@ async function openReplay(gameDoc, opts = {}) {
   document.body.classList.remove('in-game');
   $('setup').hidden = true;
   $('game').hidden = true;
+  if ($('newgame')) $('newgame').hidden = true;
   if ($('mygames')) $('mygames').hidden = true;
   $('replay').hidden = false;
   setTopNavActive('');
@@ -3371,12 +3425,7 @@ async function loadReplayComments(gameDoc, isSnapshot) {
 /* Top nav & My Games page wiring */
 $('nav-lobby').addEventListener('click', () => showSetup());
 $('nav-mygames').addEventListener('click', () => showMyGames(false));
-$('btn-mygames-new').addEventListener('click', () => {
-  showSetup().then(() => {
-    const target = $('enter-dungeon') || $('start-btn');
-    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  });
-});
+$('btn-mygames-new').addEventListener('click', () => showNewGame(null, 'mygames'));
 $('btn-mygames-signin').addEventListener('click', () => {
   if (cloud && cloud.signIn) {
     cloud.signIn().catch((e) => {
@@ -3390,18 +3439,9 @@ $('btn-rep-back').addEventListener('click', () => closeReplay(true));
 $('btn-rep-sameseed').addEventListener('click', () => {
   if (!R || !R.game) return;
   const g = R.game;
+  const fromPage = R.fromPage || 'setup';
   closeReplay(false);
-  showSetup().then(() => {
-    const givenRadio = document.querySelector('input[name="seedmode"][value="given"]');
-    if (givenRadio) givenRadio.checked = true;
-    if (/^\d+$/.test(String(g.seed))) $('seed-input').value = String(g.seed);
-    if (ROLES[g.roleKey]) {
-      $('opt-role').value = g.roleKey;
-      $('opt-role').dispatchEvent(new Event('change'));
-    }
-    const target = $('enter-dungeon') || $('start-btn');
-    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  });
+  showNewGame({ seed: g.seed, roleKey: g.roleKey }, fromPage);
 });
 $('btn-rep-share').addEventListener('click', () => {
   const url = location.href;
@@ -3488,7 +3528,7 @@ window.addEventListener('resize', () => {
   }
 });
 
-/* Deep links: #replay/<gameId> and #mygames */
+/* Deep links: #replay/<gameId>, #mygames, and #new */
 function checkRouteHash() {
   const h = location.hash || '';
   const m = /^#replay\/(.+)$/.exec(h);
@@ -3499,6 +3539,11 @@ function checkRouteHash() {
   }
   if (h === '#mygames') {
     if ($('mygames') && $('mygames').hidden) showMyGames(true);
+    return;
+  }
+  if (h === '#new') {
+    if ($('newgame') && $('newgame').hidden) showNewGame(null, 'setup');
+    return;
   }
 }
 window.addEventListener('hashchange', checkRouteHash);

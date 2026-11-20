@@ -202,7 +202,19 @@ body.in-game #foot {
   color: var(--dim);
 }
 .role-select-wrap { display: none !important; }
-#setup input[type="text"], #setup select {
+#newgame {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 16px 14px 28px;
+}
+.newgame-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+#newgame input[type="text"], #newgame select,
+.setup-card input[type="text"], .setup-card select {
   background: #0a0d12;
   color: var(--fg-bright);
   border: 1px solid var(--line);
@@ -211,7 +223,8 @@ body.in-game #foot {
   font-size: 14px;
   width: 100%;
 }
-#setup input[type="text"]:focus, #setup select:focus {
+#newgame input[type="text"]:focus, #newgame select:focus,
+.setup-card input[type="text"]:focus, .setup-card select:focus {
   outline: none;
   border-color: var(--accent);
 }
@@ -1256,19 +1269,40 @@ button.act.primary .sub { color: #543b02; }
 }
 
 /* ---------- Phase 2: YouTube-style ASCII Replay Gallery ---------- */
-.gallery-card .lobby-head {
+.gallery-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px 10px;
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--line);
 }
-.gallery-title-wrap {
+.gallery-toolbar-left {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 6px;
+  min-width: 0;
+}
+.gallery-toolbar-left h2 {
+  margin: 0 4px 0 0;
+  font-size: 16px;
+  color: var(--fg-bright);
+  white-space: nowrap;
+}
+.gallery-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-shrink: 0;
 }
 .lobby-filters {
   display: flex;
-  gap: 5px;
+  align-items: center;
+  gap: 4px;
   flex-wrap: wrap;
 }
 .filter-pill {
@@ -1276,8 +1310,11 @@ button.act.primary .sub { color: #543b02; }
   color: var(--dim);
   border: 1px solid var(--line);
   border-radius: 2px;
-  padding: 4px 9px;
+  height: 28px;
+  padding: 0 8px;
   font-size: 12px;
+  line-height: 26px;
+  white-space: nowrap;
   cursor: pointer;
 }
 .filter-pill:hover { color: var(--fg); border-color: var(--line-hi); }
@@ -1287,21 +1324,38 @@ button.act.primary .sub { color: #543b02; }
   border-color: var(--accent);
   font-weight: 700;
 }
-.gallery-tools {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+.toolbar-select {
+  width: auto;
+  max-width: 118px;
+  height: 28px;
+  background: #0b0e14;
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 0 6px;
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
 }
+.toolbar-select:hover { border-color: var(--line-hi); }
+.toolbar-select:focus { outline: none; border-color: var(--accent); }
 #lobby-search {
   background: #0b0e14;
   color: var(--fg);
   border: 1px solid var(--line);
   border-radius: 2px;
-  padding: 5px 9px;
+  height: 28px;
+  padding: 0 8px;
   font-size: 12px;
-  width: 190px;
+  width: 176px;
 }
 #lobby-search:focus { outline: none; border-color: var(--accent); }
+#btn-open-newgame {
+  height: 28px;
+  padding: 0 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
 
 .verified-gallery {
   display: grid;
@@ -1703,22 +1757,6 @@ button.act.primary .sub { color: #543b02; }
 .rep-transport { flex-wrap: wrap; }
 
 /* ---------- Phase 2b: Clean clickable cards, extra filters & replay comments ---------- */
-.gallery-tools {
-  flex-wrap: wrap;
-}
-#lobby-role-filter,
-#lobby-sort {
-  background: #0b0e14;
-  color: var(--fg);
-  border: 1px solid var(--line);
-  border-radius: 2px;
-  padding: 5px 8px;
-  font-size: 12px;
-  cursor: pointer;
-}
-#lobby-role-filter:focus,
-#lobby-sort:focus { outline: none; border-color: var(--accent); }
-
 .vgame-card.clickable {
   cursor: pointer;
 }

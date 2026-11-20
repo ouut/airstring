@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="airstring">
 <link rel="manifest" href="./manifest.json">
 <title>airstring · NetHack</title>
-<link rel="stylesheet" href="./airstring.css?v=p2fix2">
+<link rel="stylesheet" href="./airstring.css?v=p2fix3">
 </head>
 <body>
 <header id="topbar">
@@ -25,7 +25,7 @@
   <span id="auth-box"></span>
 </header>
 
-<!-- ============ Hall screen (大厅: Public Replay Gallery first, Enter Dungeon at bottom) ============ -->
+<!-- ============ Hall screen (大厅: Pure Public Verified Replay Gallery) ============ -->
 <main id="setup">
   <div id="guest-banner" class="guest-banner" hidden>
     <div class="guest-banner-text">
@@ -34,102 +34,104 @@
     <button id="btn-guest-signin" type="button" class="mini-btn primary-mini">Google 登录</button>
   </div>
 
-  <div class="setup-grid">
-    <!-- Top: YouTube-style Public Verified Replay Gallery -->
-    <section class="lobby-card gallery-card">
-      <div class="lobby-head">
-        <div class="gallery-title-wrap">
-          <h2>公开已验真录像</h2>
-          <div id="lobby-filters" class="lobby-filters" role="tablist">
-            <button type="button" class="filter-pill active" data-filter="all">全部</button>
-            <button type="button" class="filter-pill" data-filter="ascended">🏆 飞升</button>
-            <button type="button" class="filter-pill" data-filter="died">💀 阵亡</button>
-            <button type="button" class="filter-pill" data-filter="fork">⚡ 分叉</button>
-            <button type="button" class="filter-pill" data-filter="deep">🕳 深层</button>
-          </div>
+  <section class="lobby-card gallery-card">
+    <div class="gallery-toolbar">
+      <div class="gallery-toolbar-left">
+        <h2>公开已验真录像</h2>
+        <div id="lobby-filters" class="lobby-filters" role="tablist">
+          <button type="button" class="filter-pill active" data-filter="all">全部</button>
+          <button type="button" class="filter-pill" data-filter="ascended">🏆 飞升</button>
+          <button type="button" class="filter-pill" data-filter="died">💀 阵亡</button>
+          <button type="button" class="filter-pill" data-filter="fork">⚡ 分叉</button>
+          <button type="button" class="filter-pill" data-filter="deep">🕳 深层</button>
         </div>
-        <div class="gallery-tools">
-          <select id="lobby-role-filter" aria-label="按职业筛选">
-            <option value="all">全部职业</option>
-          </select>
-          <select id="lobby-sort" aria-label="排序方式">
-            <option value="newest">最新</option>
-            <option value="dlvl">最深层数</option>
-            <option value="turns">最长回合</option>
-          </select>
-          <input id="lobby-search" type="search" placeholder="搜种子 / 职业 / 玩家 / 死因…" autocomplete="off">
-          <button id="btn-scroll-newgame" type="button" class="mini-btn primary-mini">+ 开新局</button>
-        </div>
+        <select id="lobby-role-filter" class="toolbar-select" aria-label="按职业筛选">
+          <option value="all">全部职业</option>
+        </select>
+        <select id="lobby-sort" class="toolbar-select" aria-label="排序方式">
+          <option value="newest">最新</option>
+          <option value="dlvl">最深层数</option>
+          <option value="turns">最长回合</option>
+        </select>
       </div>
-      <div id="verified-list" class="verified-gallery">
-        <div class="hint">加载中…</div>
+      <div class="gallery-toolbar-right">
+        <input id="lobby-search" type="search" placeholder="搜种子 / 职业 / 玩家 / 死因…" autocomplete="off">
+        <button id="btn-open-newgame" type="button" class="mini-btn primary-mini">+ 开新局</button>
       </div>
-    </section>
+    </div>
+    <div id="verified-list" class="verified-gallery">
+      <div class="hint">加载中…</div>
+    </div>
+  </section>
+</main>
 
-    <!-- Bottom: Enter Dungeon form -->
-    <section id="enter-dungeon" class="setup-card">
-      <div class="setup-head">
-        <h1>进入地牢</h1>
-        <span class="pill-ok">纯字符终端 · 逐帧可验真</span>
-      </div>
-
-      <form id="setup-form" autocomplete="off">
-        <div class="sec">
-          <div class="sec-title">选择职业</div>
-          <div id="role-cards" class="role-cards" aria-label="快捷职业选择"></div>
-          <div class="char-row">
-            <label>名字
-              <input id="opt-name" type="text" value="fleck" maxlength="24"
-                     pattern="[A-Za-z0-9_\-]+">
-            </label>
-            <label class="role-select-wrap">职业
-              <select id="opt-role"></select>
-            </label>
-            <label>种族
-              <select id="opt-race"></select>
-            </label>
-            <label>性别
-              <select id="opt-gender">
-                <option value="female">女</option>
-                <option value="male">男</option>
-              </select>
-            </label>
-            <label>阵营
-              <select id="opt-align"></select>
-            </label>
-          </div>
-        </div>
-
-        <div class="sec">
-          <div class="sec-title">种子模式</div>
-          <div class="seed-modes">
-            <label class="radio">
-              <input type="radio" name="seedmode" value="given" checked>
-              <span>指定种子</span>
-              <input id="seed-input" type="text" inputmode="numeric"
-                     placeholder="0 – 2^64-1" value="42">
-            </label>
-            <label class="radio">
-              <input type="radio" name="seedmode" value="random">
-              <span>随机种子（开局隐藏，局终揭晓）</span>
-            </label>
-            <div id="seed-locked" class="seedline" hidden></div>
-          </div>
-        </div>
-
-        <details class="sec-collapse">
-          <summary>公平验真与自动保存说明</summary>
-          <div class="collapse-body">
-            <p class="notice">为保证成绩可验真，本站对局的游戏内日期固定（与 fleck 护照一致），月相恒定，不投放 bones 文件，wizard / explore 模式不开放。所有进度均由平台按按键流自动托管保存，不支持手工上传或下载存档。</p>
-          </div>
-        </details>
-
-        <div class="setup-actions">
-          <button id="start-btn" type="submit">开始冒险 →</button>
-        </div>
-      </form>
-    </section>
+<!-- ============ Standalone New Game page (开新局 / 进入地牢) ============ -->
+<main id="newgame" hidden>
+  <div class="newgame-top">
+    <button id="btn-newgame-back" type="button" class="mini-btn">← 返回大厅</button>
   </div>
+  <section id="enter-dungeon" class="setup-card">
+    <div class="setup-head">
+      <h1>进入地牢</h1>
+      <span class="pill-ok">纯字符终端 · 逐帧可验真</span>
+    </div>
+
+    <form id="setup-form" autocomplete="off">
+      <div class="sec">
+        <div class="sec-title">选择职业</div>
+        <div id="role-cards" class="role-cards" aria-label="快捷职业选择"></div>
+        <div class="char-row">
+          <label>名字
+            <input id="opt-name" type="text" value="fleck" maxlength="24"
+                   pattern="[A-Za-z0-9_\-]+">
+          </label>
+          <label class="role-select-wrap">职业
+            <select id="opt-role"></select>
+          </label>
+          <label>种族
+            <select id="opt-race"></select>
+          </label>
+          <label>性别
+            <select id="opt-gender">
+              <option value="female">女</option>
+              <option value="male">男</option>
+            </select>
+          </label>
+          <label>阵营
+            <select id="opt-align"></select>
+          </label>
+        </div>
+      </div>
+
+      <div class="sec">
+        <div class="sec-title">种子模式</div>
+        <div class="seed-modes">
+          <label class="radio">
+            <input type="radio" name="seedmode" value="given" checked>
+            <span>指定种子</span>
+            <input id="seed-input" type="text" inputmode="numeric"
+                   placeholder="0 – 2^64-1" value="42">
+          </label>
+          <label class="radio">
+            <input type="radio" name="seedmode" value="random">
+            <span>随机种子（开局隐藏，局终揭晓）</span>
+          </label>
+          <div id="seed-locked" class="seedline" hidden></div>
+        </div>
+      </div>
+
+      <details class="sec-collapse">
+        <summary>公平验真与自动保存说明</summary>
+        <div class="collapse-body">
+          <p class="notice">为保证成绩可验真，本站对局的游戏内日期固定（与 fleck 护照一致），月相恒定，不投放 bones 文件，wizard / explore 模式不开放。所有进度均由平台按按键流自动托管保存，不支持手工上传或下载存档。</p>
+        </div>
+      </details>
+
+      <div class="setup-actions">
+        <button id="start-btn" type="submit">开始冒险 →</button>
+      </div>
+    </form>
+  </section>
 </main>
 
 <!-- ============ game screen (100dvh pure-black Curses terminal) ============ -->
@@ -386,7 +388,7 @@
 </main>
 
 <footer id="foot">airstring · NetHack 3.6.7 · 种子对局 · 全程可验真</footer>
-<script src="./firebase-config.js?v=p2fix2"></script>
-<script type="module" src="./airstring.js?v=p2fix2"></script>
+<script src="./firebase-config.js?v=p2fix3"></script>
+<script type="module" src="./airstring.js?v=p2fix3"></script>
 </body>
 </html>
