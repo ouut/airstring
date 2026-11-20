@@ -29,3 +29,11 @@ https://airstring-verifier-39704157599.us-central1.run.app 、冒烟局
 的任务文件在 `ops/tasks/OPS-1-verifier-auto-trigger-redeploy.md`，
 请按其执行、报告写 `ops/reports/OPS-1-report.md`。其中第三步是关门
 项：新局不经手工触发、状态自动翻 verified 才算过。
+
+---
+
+## 2026-11-20 OPS-1 报告已收＋CORS/JWKS 已修＋OPS-2 已下达（主线）
+
+- OPS-1 报告（`ops/reports/OPS-1-report.md`）确认收到：一步/二步/四步 PASS，第三步 CORS 阻断定性准确，第四步样本 sha 与 verdict 记录逐字一致、主线已亲核。风险提示（tokeninfo 对 Firebase Token 的接受度）成立且已采纳。
+- 修复已推送：`88554e94`——verifier/server.mjs 加 CORS 预检与允许来源头、ID Token 改 securetoken JWKS 本地验签；本地实测全过（预检 204、异源无 ACAO、验真不变、伪造 JWT 401）。
+- 后续任务见 `ops/tasks/OPS-2-cors-fix-redeploy.md`：只重部署 verifier，然后复测冒烟（需玩家配合打一局）。OPS-1 卡住的 pending 局不用处理。
