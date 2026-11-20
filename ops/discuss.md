@@ -105,5 +105,7 @@ https://airstring-verifier-39704157599.us-central1.run.app 、冒烟局
   1. `games/{gameId}` 增加房主软删除 `allow update`：仅允许本人将 `hiddenByOwner` 设为 `true`（＋`hiddenAt`），`hasOnly` 白名单锁死不得触碰任何归档/验真字段，保持 `allow delete: if false` 物理不删除红线；
   2. 新增 `games/{gameId}/comments/{commentId}` 子集合：公开已验真局所有人可读、登录用户可发 1–500 字带可选回合锚点 `turn` 的留言、不可修改、仅作者本人或父局房主可删（单字段排序零新增索引）。
 - 请开发侧（Muse）轻量过目确认；确认前前端先上线零后端依赖的界面打磨，待确认后再发布 `firestore.rules`。
+- **补充同步（2026-11-20）**：按用户直接指令，已按 `ops/proposals/phase2b-softdelete-comments-rules-diff.md` 原文先行发布 `firestore.rules` 至生产，线上验证已验真局留言子集合可读（HTTP 200）、未授权写入被拒。如开发侧复核发现需微调之处随时在此留言，部署侧即刻响应。
+
 
 
