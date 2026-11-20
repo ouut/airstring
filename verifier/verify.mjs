@@ -18,7 +18,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 export const PINNED_DATE = 1700000000; // spec SS2.2, passport value
-export const VERIFIER_ID = 'airstring-verifier/2 (Phase 2)';
+export const VERIFIER_ID = 'airstring-verifier/1 (S6)';
 
 const B64 = /^[A-Za-z0-9+/]*={0,2}$/;
 
@@ -103,7 +103,7 @@ export function parseRecording(text) {
   };
 }
 
-/* ---------------- headless replay & summary extraction ---------------- */
+/* ---------------- headless replay ---------------- */
 
 function frameHashes(framesText) {
   const hashes = [];
@@ -114,127 +114,12 @@ function frameHashes(framesText) {
   return hashes;
 }
 
-function buildAsciiThumb(mapEv) {
-  if (!mapEv || !Array.isArray(mapEv.rows) || !mapEv.rows.length) return null;
-  const W = 35, H = 11;
-  const rows = mapEv.rows;
-  const colors = Array.isArray(mapEv.colors) ? mapEv.colors : [];
-  let hx = 40, hy = 10;
-  for (let y = 0; y < rows.length; y++) {
-    const x = String(rows[y] || '').indexOf('@');
-    if (x >= 0) { hx = x; hy = y; break; }
-  }
-  const mapH = Math.min(21, rows.length);
-  const x0 = Math.max(0, Math.min(80 - W, hx - Math.floor(W / 2)));
-  const y0 = Math.max(0, Math.min(Math.max(0, mapH - H), hy - Math.floor(H / 2)));
-  const r = [];
-  const c = [];
-  for (let dy = 0; dy < H; dy++) {
-    const my = y0 + dy;
-    const line = String(rows[my] || '').padEnd(80, ' ');
-    const cline = Array.isArray(colors[my]) ? colors[my] : [];
-    r.push(line.slice(x0, x0 + W));
-    let cs = '';
-    for (let dx = 0; dx < W; dx++) {
-      const col = cline[x0 + dx];
-      cs += (typeof col === 'number' ? (col & 0xf) : 7).toString(16);
-    }
-    c.push(cs);
-  }
-  const json = JSON.stringify({ w: W, h: H, r, c });
-  return Buffer.byteLength(json, 'utf8') <= 2048 ? json : null;
-}
-
-export function extractSummary(framesText, eventsText, header) {
-  let maxDlvl = 1;
-  for (const m of String(framesText || '').matchAll(/\bdlevel=(\d+)/g)) {
-    const d = parseInt(m[1], 10);
-    if (d > maxDlvl) maxDlvl = d;
-  }
-
-  let lastMapWithHero = null;
-  let lastMapAny = null;
-  let sawRip = false;
-  let sawQuest = false;
-  const recentMsgs = [];
-  const lastTexts = [];
-
-  for (const line of String(eventsText || '').split('\n')) {
-    if (!line.trim()) continue;
-    let ev;
-    try { ev = JSON.parse(line); } catch (e) { continue; }
-    if (ev.t === 'map' && Array.isArray(ev.rows)) {
-      lastMapAny = ev;
-      if (ev.rows.some((r) => String(r).includes('@'))) {
-        lastMapWithHero = ev;
-      }
-    } else if (ev.t === 'rip') {
-      sawRip = true;
-    } else if ((ev.t === 'message' || ev.t === 'raw') && typeof ev.text === 'string') {
-      const txt = ev.text.trim();
-      if (txt) {
-        recentMsgs.push(txt);
-        if (recentMsgs.length > 20) recentMsgs.shift();
-        if (/quest|nemesis|bell of opening|candelabrum/i.test(txt)) sawQuest = true;
-      }
-    } else if (ev.t === 'text' && Array.isArray(ev.lines)) {
-      const lines = ev.lines
-        .map((l) => (typeof l === 'string' ? l : (l && l.text) || '').trim())
-        .filter(Boolean);
-      if (lines.length) {
-        lastTexts.push(lines);
-        if (lastTexts.length > 4) lastTexts.shift();
-      }
-    }
-  }
-
-  const allTailLines = [...lastTexts.flat(), ...recentMsgs];
-  const joined = allTailLines.join('\n');
-
-  let outcome = 'quit';
-  let deathReason = 'quit';
-
-  if (/ascended|demigod|demigoddess/i.test(joined)) {
-    outcome = 'ascended';
-    deathReason = 'ascended';
-  } else if (sawRip ||
-      /killed by|you die|died of|choked on|petrified|drowned|poisoned|burned to a crisp|starved|slain by|fell into|disintegrated|crushed/i.test(joined)) {
-    if (/\bquit\b/i.test(joined) && !sawRip && !/killed by|slain by/i.test(joined)) {
-      outcome = 'quit';
-      deathReason = 'quit';
-    } else {
-      outcome = 'died';
-      const causeLine = allTailLines.find((l) =>
-        /killed by|died of|choked on|petrified|drowned|poisoned|burned|starved|slain by|fell into|disintegrated|crushed/i.test(l));
-      deathReason = (causeLine || 'died').slice(0, 120);
-    }
-  } else if (/escaped the dungeon/i.test(joined)) {
-    outcome = 'quit';
-    deathReason = 'escaped the dungeon';
-  } else if (/really quit|you quit/i.test(joined)) {
-    outcome = 'quit';
-    deathReason = 'quit';
-  }
-
-  const roleMatch = /\brole:([a-z]+)/i.exec(String(header && header.options || ''));
-  const role = roleMatch ? roleMatch[1].toLowerCase() : null;
-  const tags = [];
-  if (outcome === 'ascended') tags.push('stage20-ascension');
-  if (sawQuest && role) tags.push('quest-' + role);
-  if (maxDlvl >= 10) tags.push('deep-run');
-  if (header && header.parentGameId) tags.push('fork');
-
-  const thumb = buildAsciiThumb(lastMapWithHero || lastMapAny);
-  return { thumb, maxDlvl, outcome, deathReason, tags };
-}
-
 export function replay(root, { seed, date, options, keys },
                        timeoutMs = 120000) {
   return new Promise((resolve, reject) => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'airstring-verify-'));
     const keysFile = path.join(tmp, 'keys.bin');
     const outPrefix = path.join(tmp, 'replay');
-    const eventsFile = path.join(tmp, 'events.jsonl');
     fs.writeFileSync(keysFile, keys);
     const child = spawn('node', [
       path.join(root, 'tools', 'run-node-s3.mjs'),
@@ -244,7 +129,6 @@ export function replay(root, { seed, date, options, keys },
       '--date', String(date),
       '--options', String(options),
       '--out', outPrefix,
-      '--events', eventsFile,
       '--quiet-keys',
     ], { cwd: root });
     let log = '';
@@ -259,15 +143,7 @@ export function replay(root, { seed, date, options, keys },
       clearTimeout(timer);
       try {
         const frames = fs.readFileSync(outPrefix + '.frames', 'utf8');
-        let eventsText = '';
-        try { eventsText = fs.readFileSync(eventsFile, 'utf8'); } catch (_) { }
-        resolve({
-          hashes: frameHashes(frames),
-          framesText: frames,
-          eventsText,
-          exitCode: code,
-          log,
-        });
+        resolve({ hashes: frameHashes(frames), exitCode: code, log });
       } catch (e) {
         reject(Object.assign(
           new Error('replay-produced-no-frames: exit=' + code),
@@ -300,6 +176,13 @@ export async function verifyRecording(text, { root }) {
     restored: header.restored ?? null, endStatus: end.status,
   });
 
+  // A restored game's key stream is not self-contained (the
+  // recording starts at the restore point; replay would need the
+  // parent save). Per docs/recording-format.md and s5-report SS8
+  // such recordings must be linked to their parent before they can
+  // be verified; standalone they are rejected for that stated
+  // reason -- this is a self-containment limit, NOT a hash
+  // mismatch and NOT evidence of tampering.
   if (header.restored)
     return {
       ...base, verdict: 'rejected',
@@ -344,11 +227,8 @@ export async function verifyRecording(text, { root }) {
       reason: 'hash-mismatch at frame ' + base.firstMismatch.frame +
         ' (turn ' + base.firstMismatch.turn + ')',
     };
-  const summary = extractSummary(rep.framesText, rep.eventsText, header);
   return {
-    ...base,
-    ...summary,
-    verdict: 'verified',
+    ...base, verdict: 'verified',
     reason: 'hash-chain: all ' + turns.length +
       ' frame hashes reproduced by headless replay',
   };

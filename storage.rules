@@ -41,19 +41,11 @@ service firebase.storage {
                    && request.resource.size < 1024 * 1024;
     }
 
-    // Active-game key-stream snapshots for cross-device resume.
+    // Save-game blobs for cross-device resume.
     match /saves/{uid}/{file} {
       allow read: if ownUid(uid);
-      allow create, update: if ownUid(uid)
-                            && request.resource.size < 5 * 1024 * 1024;
-      allow delete: if ownUid(uid);
-    }
-
-    // Public read-only recordings of verified games (written ONLY by
-    // the Cloud Run verifier via its service account).
-    match /public-recordings/{file} {
-      allow read: if true;
-      allow write: if false;
+      allow write: if ownUid(uid)
+                   && request.resource.size < 5 * 1024 * 1024;
     }
 
     match /{allPaths=**} {

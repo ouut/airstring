@@ -45,9 +45,6 @@ function fv(v) {
       ? { integerValue: String(v) } : { doubleValue: v };
   }
   if (v instanceof Date) return { timestampValue: v.toISOString() };
-  if (Array.isArray(v)) {
-    return { arrayValue: { values: v.map((x) => fv(x)) } };
-  }
   if (typeof v === 'object') {
     const fields = {};
     for (const [k, x] of Object.entries(v)) fields[k] = fv(x);
@@ -126,25 +123,14 @@ export class FirestoreVerdictStore {
       verifiedAt: record.verifiedAt,
       verifier: record.verifier,
     });
-    const gamePatch = {
+    await firestorePatch('games', record.gameId, {
       status: record.verdict,
       verdictReason: record.reason,
       verifiedAt: record.verifiedAt,
       framesCompared: record.framesCompared,
       framesMatched: record.framesMatched,
       recordingSha256: record.recordingSha256,
-    };
-    if (record.verdict === 'verified') {
-      if (record.publicRecordingPath) {
-        gamePatch.publicRecordingPath = record.publicRecordingPath;
-      }
-      if (record.thumb) gamePatch.thumb = record.thumb;
-      if (typeof record.maxDlvl === 'number') gamePatch.maxDlvl = record.maxDlvl;
-      if (record.outcome) gamePatch.outcome = record.outcome;
-      if (record.deathReason) gamePatch.deathReason = record.deathReason;
-      if (Array.isArray(record.tags)) gamePatch.tags = record.tags;
-    }
-    await firestorePatch('games', record.gameId, gamePatch);
+    });
   }
 }
 
@@ -163,33 +149,4 @@ export async function fetchStorageObject(objectPath, bucket) {
     throw new Error('storage-get ' + objectPath + ': HTTP ' +
       res.status);
   return await res.text();
-}
-
-/* Publish a verified recording to public-recordings/{gameId}.jsonl.
- * Uses ifGenerationMatch=0 so roles/storage.objectCreator (create-only,
- * no overwrite/delete) suffices; HTTP 412 means already published. */
-export async function uploadPublicRecording(gameId, recordingText, bucket) {
-  const b = bucket || process.env.STORAGE_BUCKET ||
-    projectId() + '.firebasestorage.app';
-  const objectPath = 'public-recordings/' + gameId + '.jsonl';
-  const url = 'https://storage.googleapis.com/upload/storage/v1/b/' +
-    encodeURIComponent(b) + '/o?uploadType=media&name=' +
-    encodeURIComponent(objectPath) + '&ifGenerationMatch=0';
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      authorization: 'Bearer ' + (await accessToken()),
-      'content-type': 'application/x-ndjson',
-    },
-    body: String(recordingText),
-  });
-  if (res.status === 412) {
-    /* Already exists: idempotent skip under objectCreator */
-    return objectPath;
-  }
-  if (!res.ok) {
-    throw new Error('storage-put ' + objectPath + ': HTTP ' +
-      res.status + ' ' + (await res.text()).slice(0, 200));
-  }
-  return objectPath;
 }
