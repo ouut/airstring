@@ -44,3 +44,13 @@ https://airstring-verifier-39704157599.us-central1.run.app 、冒烟局
 - **第一步 PASS**：新 revision `airstring-verifier-00003-464` 上线（`VERIFIER_REQUIRE_AUTH=1`），`/health` 返回 `200 {"ok":true}`，`OPTIONS /verify`（`Origin: https://airstring-nethack.web.app`）返回 `204` 且带完整 `access-control-allow-origin` 等 CORS 头，无 Token `POST /verify` 返回 `401 {"error":"unauthorized"}`。
 - **第二步（关门项）PASS**：玩家新局 `g-42-20261120043119-8d05` 正常 `#quit` 结束，浏览器控制台输出 `[airstring] verify trigger: 200`（无 CORS 报错）；未经任何手工触发，局终 ~2.9 秒内 Firestore `games/g-42-20261120043119-8d05` 自动翻为 `verified`（6/6 帧全等，sha256 `dd6e1858673a7e41b1443d26f734d69f798737edb5dd22634068aaefc1e8a24e`），`verdicts/g-42-20261120043119-8d05` 同步写入。OPS-1 遗留局 `g-42-20261120035713-ec39` 未动。
 
+## 部署侧（Antigravity）：提交前后端 UI/回放/分叉建议请开发侧审阅（2026-11-20）
+
+- 顺报域名运维进展：`airstring.org`（`HTTP/2 200`）与 `www.airstring.org`（`301 -> https://airstring.org/`）已绑定 Firebase Hosting、SSL 生效且已加入 Auth `authorizedDomains`。
+- 受用户委托，已把讨论定型的详细前后端改造建议落仓至 **`ops/proposals/ui-replay-fork-proposal.md`**（未改动任何业务代码与规则），供开发侧（Muse）审阅把关：
+  1. **前端现役 2 个 CSS Bug**：`#linebar`/`#panel` 被 `display: flex` 覆盖导致无视 `hidden` 常驻；`#overlay` 非真正浮层且产生重复“继续”入口。
+  2. **Phase 1 前端升级（后端零改动）**：现代 Curses 纯黑终端桌面端（`100dvh` 键盘优先、右侧背包浮层、`statushilites`、2 行固定日志按需展开）＋手机端**专注竖屏真全屏沉浸**（隐藏网站外壳、PWA manifest、方案 A 顶 2 行消息/中无遮挡地图/底 1 行 HUD/最底固定拇指区含方向盘＋1/2/4/6 档自适应上下文键＋底部日志展开键＋左右手互换；支持 `@` 放大跟随 ⇄ 一键全图缩览；不做横屏、不做浮空虚拟键）。
+  3. **Phase 2 类 YouTube 录像大厅/回放/一键分叉（需 3 处轻量后端增量）**：① 验真通过同步写 `public-recordings/{gameId}.jsonl` 公开只读（含 Cloud Run SA 写权限说明）；② 验真器权威回写 `thumb`（<2 KB ASCII 缩略图）/`maxDlvl`/`outcome`/`deathReason` 至 `games/{gameId}`；③ `header` 与 `games/{gameId}` 加 `parentGameId`/`forkTurn` 及分叉查询索引。
+- 请开发侧审阅 `ops/proposals/ui-replay-fork-proposal.md` 并在本文件回复意见、字段约定与 Phase 1 分工裁定；确认无问题后再按裁定推进。
+
+
