@@ -111,15 +111,26 @@
       </form>
     </section>
 
-    <aside class="lobby-card">
+    <section class="lobby-card gallery-card">
       <div class="lobby-head">
-        <h2>近期已验真对局</h2>
-        <button id="btn-refresh-lobby" type="button" class="mini-btn">刷新</button>
+        <div class="gallery-title-wrap">
+          <h2>公开已验真录像大厅</h2>
+          <div id="lobby-filters" class="lobby-filters" role="tablist">
+            <button type="button" class="filter-pill active" data-filter="all">全部</button>
+            <button type="button" class="filter-pill" data-filter="ascended">🏆 飞升</button>
+            <button type="button" class="filter-pill" data-filter="died">💀 阵亡</button>
+            <button type="button" class="filter-pill" data-filter="fork">⚡ 分叉</button>
+          </div>
+        </div>
+        <div class="gallery-tools">
+          <input id="lobby-search" type="search" placeholder="搜索种子 / 职业 / 玩家…" autocomplete="off">
+          <button id="btn-refresh-lobby" type="button" class="mini-btn">刷新</button>
+        </div>
       </div>
-      <div id="verified-list" class="verified-list">
+      <div id="verified-list" class="verified-gallery">
         <div class="hint">加载中…</div>
       </div>
-    </aside>
+    </section>
   </div>
 </main>
 
@@ -242,6 +253,82 @@
         iPhone 用户可在 Safari 点「添加到主屏幕」获得无地址栏全屏体验。
       </div>
     </div>
+  </div>
+</main>
+
+<!-- ============ replay theater (Phase 2: YouTube-style ASCII player + 1-click Fork) ============ -->
+<main id="replay" hidden>
+  <div class="replay-top">
+    <div class="replay-top-left">
+      <button id="btn-rep-back" type="button" class="mini-btn">← 返回大厅</button>
+      <div id="rep-title" class="replay-title">录像回放</div>
+      <span id="rep-badge" class="vgame-badge">✓ 已验真</span>
+    </div>
+    <div class="replay-top-right">
+      <button id="btn-rep-share" type="button" class="mini-btn">🔗 复制链接</button>
+    </div>
+  </div>
+
+  <div class="replay-layout">
+    <section class="replay-main">
+      <div class="rep-msg-wrap">
+        <div id="rep-msg-prev"></div>
+        <div id="rep-msg"></div>
+      </div>
+
+      <div id="rep-stage">
+        <div id="rep-grid" role="img" aria-label="回放地图"></div>
+        <div id="rep-buffer-overlay" hidden>
+          <div class="buffer-card">
+            <div id="rep-buffer-title" class="buffer-title">正在缓冲回放帧…</div>
+            <div class="buffer-track"><div id="rep-buffer-fill"></div></div>
+            <div id="rep-buffer-detail" class="buffer-detail">下载公开录像中…</div>
+            <div class="buffer-sub">本地 WASM 帧缓存就绪后支持 0 延迟前进/后退拖拽</div>
+          </div>
+        </div>
+      </div>
+
+      <div id="rep-status-wrap">
+        <div id="rep-status"></div>
+        <div id="rep-hp-track"><div id="rep-hp-fill"></div></div>
+      </div>
+
+      <div id="rep-controls">
+        <div class="rep-seek-row">
+          <input id="rep-seek" type="range" min="0" max="0" value="0" step="1">
+          <span id="rep-time">回合 0 / 0</span>
+        </div>
+        <div class="rep-btn-row">
+          <div class="rep-transport">
+            <button id="btn-rep-start" type="button" title="回到开头">⏮</button>
+            <button id="btn-rep-prev" type="button" title="上一帧 (←)">◀</button>
+            <button id="btn-rep-play" type="button" class="primary" title="播放/暂停 (Space)">▶ 播放</button>
+            <button id="btn-rep-next" type="button" title="下一帧 (→)">▶</button>
+            <select id="rep-speed" title="回放倍速">
+              <option value="0.5">0.5x</option>
+              <option value="1" selected>1x</option>
+              <option value="2">2x</option>
+              <option value="4">4x</option>
+              <option value="8">8x</option>
+            </select>
+          </div>
+          <button id="btn-rep-fork" type="button" class="fork-cta">⚡ 从当前回合分叉由我来打</button>
+        </div>
+      </div>
+    </section>
+
+    <aside class="replay-side">
+      <div class="rep-card">
+        <h3>验真护照</h3>
+        <div id="rep-passport" class="rep-passport"></div>
+      </div>
+      <div class="rep-card">
+        <h3>分叉家族树</h3>
+        <div id="rep-forks-list" class="rep-forks-list">
+          <div class="hint">查询中…</div>
+        </div>
+      </div>
+    </aside>
   </div>
 </main>
 

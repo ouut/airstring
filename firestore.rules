@@ -34,7 +34,9 @@ service cloud.firestore {
     function verdictFields() {
       return ['verdict', 'verdictReason', 'verifiedAt',
               'framesCompared', 'framesMatched', 'firstMismatch',
-              'recordingSha256'];
+              'recordingSha256',
+              'publicRecordingPath', 'thumb', 'maxDlvl',
+              'outcome', 'deathReason', 'tags'];
     }
 
     match /games/{gameId} {

@@ -200,6 +200,7 @@ const server = http.createServer(async (req, res) => {
         return send(res, 403, { error: 'forbidden' }, CORS);
     }
   }
+  const payload = parseEnvelope(body);
   let text;
   try {
     text = await recordingFromBody(body);
@@ -219,6 +220,17 @@ const server = http.createServer(async (req, res) => {
     if (hit) return send(res, 200, { ...hit, idempotent: true }, CORS);
   }
   const verdict = await verifyRecording(text, { root: ROOT });
+  if (verdict.verdict === 'verified' && verdict.gameId &&
+      process.env.VERIFIER_STORE === 'firestore') {
+    try {
+      const { uploadPublicRecording } = await import('./gcp.mjs');
+      verdict.publicRecordingPath = await uploadPublicRecording(
+        verdict.gameId, text, payload && payload.bucket);
+    } catch (e) {
+      console.error('[verifier] public-recording upload failed:',
+        e && e.message || e);
+    }
+  }
   if (verdict.gameId) await store.put(verdict);
   return send(res, 200, { ...verdict, idempotent: false }, CORS);
 });

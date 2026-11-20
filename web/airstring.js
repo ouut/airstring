@@ -114,7 +114,7 @@ function fillSetupForm() {
   sync();
 }
 
-/* ---------------- setup lobby: read-only public verified games ---------------- */
+/* ---------------- setup lobby: Phase 2 YouTube-style verified replay gallery ---------------- */
 function parseOptionMap(optStr) {
   const out = {};
   for (const part of String(optStr || '').split(',')) {
@@ -130,18 +130,234 @@ function fsVal(f) {
   if ('doubleValue' in f) return Number(f.doubleValue);
   if ('timestampValue' in f) return f.timestampValue;
   if ('booleanValue' in f) return f.booleanValue;
+  if ('arrayValue' in f) {
+    return ((f.arrayValue && f.arrayValue.values) || []).map(fsVal);
+  }
   return null;
 }
+
+function parseGameDoc(doc) {
+  const f = (doc && doc.fields) || {};
+  const gameId = fsVal(f.gameId) || (doc.name ? doc.name.split('/').pop() : '');
+  const options = fsVal(f.options) || '';
+  const opts = parseOptionMap(options);
+  return {
+    gameId,
+    seed: String(fsVal(f.seed) ?? '?'),
+    seedSource: fsVal(f.seedSource) || 'given',
+    options,
+    name: opts.name || 'fleck',
+    roleKey: opts.role || 'valkyrie',
+    turns: fsVal(f.turns) ?? 0,
+    frames: fsVal(f.framesMatched) ?? fsVal(f.frames) ?? 0,
+    framesCompared: fsVal(f.framesCompared) ?? fsVal(f.frames) ?? 0,
+    framesMatched: fsVal(f.framesMatched) ?? fsVal(f.frames) ?? 0,
+    createdAt: fsVal(f.createdAt) || '',
+    verifiedAt: fsVal(f.verifiedAt) || '',
+    recordingSha256: fsVal(f.recordingSha256) || '',
+    publicRecordingPath: fsVal(f.publicRecordingPath) || null,
+    thumb: fsVal(f.thumb) || null,
+    maxDlvl: fsVal(f.maxDlvl) ?? null,
+    outcome: fsVal(f.outcome) || null,
+    deathReason: fsVal(f.deathReason) || null,
+    tags: Array.isArray(fsVal(f.tags)) ? fsVal(f.tags) : [],
+    parentGameId: fsVal(f.parentGameId) || null,
+    forkTurn: fsVal(f.forkTurn),
+  };
+}
+
+function renderAsciiThumb(thumbJson) {
+  let obj;
+  try { obj = JSON.parse(thumbJson); } catch (e) { return null; }
+  if (!obj || !Array.isArray(obj.r) || !obj.r.length) return null;
+  const pre = document.createElement('pre');
+  pre.className = 'ascii-thumb';
+  for (let y = 0; y < obj.r.length; y++) {
+    const rowStr = String(obj.r[y] || '');
+    const colStr = String((obj.c && obj.c[y]) || '');
+    const lineDiv = document.createElement('div');
+    let runColor = null;
+    let runText = '';
+    const flush = () => {
+      if (!runText) return;
+      const sp = document.createElement('span');
+      sp.className = 'c' + (runColor != null ? runColor : 7);
+      sp.textContent = runText;
+      lineDiv.appendChild(sp);
+      runText = '';
+    };
+    for (let x = 0; x < rowStr.length; x++) {
+      const ch = rowStr[x];
+      const ci = parseInt(colStr[x] || '7', 16);
+      const c = Number.isFinite(ci) ? (ci & 0xf) : 7;
+      if (ch === '@') {
+        flush();
+        const heroSp = document.createElement('span');
+        heroSp.className = 'c15 hero-at';
+        heroSp.textContent = '@';
+        lineDiv.appendChild(heroSp);
+        runColor = null;
+      } else if (c === runColor) {
+        runText += ch;
+      } else {
+        flush();
+        runColor = c;
+        runText = ch;
+      }
+    }
+    flush();
+    pre.appendChild(lineDiv);
+  }
+  return pre;
+}
+
+let verifiedGamesCache = [];
+let lobbyFilter = 'all';
+
+function renderVerifiedGallery() {
+  const box = $('verified-list');
+  if (!box) return;
+  const q = (($('lobby-search') && $('lobby-search').value) || '').trim().toLowerCase();
+
+  const list = verifiedGamesCache.filter((g) => {
+    if (lobbyFilter === 'ascended' && g.outcome !== 'ascended') return false;
+    if (lobbyFilter === 'died' && g.outcome !== 'died') return false;
+    if (lobbyFilter === 'fork' && !g.parentGameId) return false;
+    if (q) {
+      const roleZh = (ROLES[g.roleKey] && ROLES[g.roleKey].zh) || '';
+      const hay = `${g.name} ${g.roleKey} ${roleZh} ${g.seed} ${g.gameId} ${g.deathReason || ''}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  if (!list.length) {
+    box.innerHTML = '<div class="hint">没有匹配筛选条件的公开已验真对局。</div>';
+    return;
+  }
+
+  box.innerHTML = '';
+  for (const g of list) {
+    const roleZh = (ROLES[g.roleKey] && ROLES[g.roleKey].zh) || g.roleKey;
+    const when = g.createdAt
+      ? new Date(g.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+      : '';
+
+    const card = document.createElement('article');
+    card.className = 'vgame-card';
+
+    /* Top pure-black ASCII thumbnail preview */
+    const thumbWrap = document.createElement('div');
+    thumbWrap.className = 'vgame-thumb-wrap';
+    const pre = g.thumb ? renderAsciiThumb(g.thumb) : null;
+    if (pre) {
+      thumbWrap.appendChild(pre);
+    } else {
+      const ph = document.createElement('div');
+      ph.className = 'ascii-thumb-placeholder';
+      ph.textContent = `@  #${g.seed}\n${g.name} · ${roleZh}\n（历史局无缩略图）`;
+      thumbWrap.appendChild(ph);
+    }
+
+    const outPill = document.createElement('span');
+    outPill.className = 'thumb-pill-tl' +
+      (g.outcome === 'ascended' ? ' ascended' : g.outcome === 'died' ? ' died' : '');
+    outPill.textContent = g.outcome === 'ascended' ? '🏆 飞升'
+      : g.outcome === 'died' ? '💀 阵亡'
+      : g.parentGameId ? '⚡ 分叉局' : '✓ 已验真';
+    thumbWrap.appendChild(outPill);
+
+    const framePill = document.createElement('span');
+    framePill.className = 'thumb-pill-tr';
+    framePill.textContent = `✓ ${g.framesMatched} 帧`;
+    thumbWrap.appendChild(framePill);
+
+    const statPill = document.createElement('span');
+    statPill.className = 'thumb-pill-br';
+    statPill.textContent = (g.maxDlvl ? `Dlvl:${g.maxDlvl} · ` : '') + `T:${g.turns}`;
+    thumbWrap.appendChild(statPill);
+
+    if (g.publicRecordingPath) {
+      thumbWrap.title = '点击观看录像与分叉';
+      thumbWrap.addEventListener('click', () => openReplay(g));
+    }
+
+    const body = document.createElement('div');
+    body.className = 'vgame-body';
+
+    const top = document.createElement('div');
+    top.className = 'vgame-top';
+    const title = document.createElement('span');
+    title.textContent = `${g.name} · ${roleZh} · #${g.seed}`;
+    top.appendChild(title);
+    if (g.parentGameId) {
+      const fb = document.createElement('span');
+      fb.className = 'ag-badge fork';
+      fb.textContent = `⚡ T${g.forkTurn ?? 0}`;
+      top.appendChild(fb);
+    }
+
+    const meta = document.createElement('div');
+    meta.className = 'vgame-meta';
+    const m1 = document.createElement('span');
+    m1.textContent = g.gameId;
+    const m2 = document.createElement('span');
+    m2.textContent = when;
+    meta.append(m1, m2);
+
+    body.append(top, meta);
+    if (g.deathReason) {
+      const rs = document.createElement('div');
+      rs.className = 'vgame-reason';
+      rs.textContent = g.deathReason;
+      rs.title = g.deathReason;
+      body.appendChild(rs);
+    }
+
+    const foot = document.createElement('div');
+    foot.className = 'vgame-foot';
+
+    if (g.publicRecordingPath) {
+      const playBtn = document.createElement('button');
+      playBtn.type = 'button';
+      playBtn.className = 'mini-btn play-btn';
+      playBtn.textContent = '▶ 回放 / 分叉';
+      playBtn.addEventListener('click', () => openReplay(g));
+      foot.appendChild(playBtn);
+    }
+
+    const sameBtn = document.createElement('button');
+    sameBtn.type = 'button';
+    sameBtn.className = 'mini-btn';
+    sameBtn.textContent = '同种子开局';
+    sameBtn.addEventListener('click', () => {
+      const givenRadio = document.querySelector('input[name="seedmode"][value="given"]');
+      if (givenRadio) givenRadio.checked = true;
+      if (/^\d+$/.test(String(g.seed))) $('seed-input').value = String(g.seed);
+      if (ROLES[g.roleKey]) {
+        $('opt-role').value = g.roleKey;
+        $('opt-role').dispatchEvent(new Event('change'));
+      }
+      $('start-btn').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    foot.appendChild(sameBtn);
+
+    body.appendChild(foot);
+    card.append(thumbWrap, body);
+    box.appendChild(card);
+  }
+}
+
 async function loadVerifiedLobby() {
   const box = $('verified-list');
   if (!box) return;
   const cfg = globalThis.AIRSTRING_FIREBASE_CONFIG;
   const project = cfg && cfg.projectId;
   if (!project || project.startsWith('REPLACE_')) {
-    box.innerHTML = '<div class="hint">本地桩模式：未连接云端榜单。</div>';
+    box.innerHTML = '<div class="hint">本地桩模式：未连接云端录像大厅。</div>';
     return;
   }
-  box.innerHTML = '<div class="hint">加载已验真对局…</div>';
+  box.innerHTML = '<div class="hint">加载公开已验真录像…</div>';
   try {
     const url = 'https://firestore.googleapis.com/v1/projects/' +
       encodeURIComponent(project) + '/databases/(default)/documents:runQuery';
@@ -159,74 +375,36 @@ async function loadVerifiedLobby() {
             },
           },
           orderBy: [{ field: { fieldPath: 'createdAt' }, direction: 'DESCENDING' }],
-          limit: 12,
+          limit: 36,
         },
       }),
     });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const rows = await r.json();
-    const docs = rows.filter((x) => x.document && x.document.fields).map((x) => x.document);
-    if (!docs.length) {
+    verifiedGamesCache = rows
+      .filter((x) => x.document && x.document.fields)
+      .map((x) => parseGameDoc(x.document));
+    if (!verifiedGamesCache.length) {
       box.innerHTML = '<div class="hint">暂无公开已验真对局，开一局成为第一人！</div>';
       return;
     }
-    box.innerHTML = '';
-    for (const doc of docs) {
-      const f = doc.fields;
-      const gameId = fsVal(f.gameId) || doc.name.split('/').pop();
-      const seed = fsVal(f.seed) || '?';
-      const turns = fsVal(f.turns) ?? 0;
-      const frames = fsVal(f.framesMatched) ?? fsVal(f.frames) ?? 0;
-      const opts = parseOptionMap(fsVal(f.options));
-      const roleKey = opts.role || 'valkyrie';
-      const roleZh = (ROLES[roleKey] && ROLES[roleKey].zh) || roleKey;
-      const name = opts.name || 'fleck';
-      const ts = fsVal(f.createdAt);
-      const when = ts ? new Date(ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
-
-      const item = document.createElement('div');
-      item.className = 'vgame-item';
-      const top = document.createElement('div');
-      top.className = 'vgame-top';
-      const title = document.createElement('span');
-      title.textContent = `${name} · ${roleZh} · 种子 #${seed}`;
-      const badge = document.createElement('span');
-      badge.className = 'vgame-badge';
-      badge.textContent = `✓ ${frames} 帧`;
-      top.append(title, badge);
-
-      const meta = document.createElement('div');
-      meta.className = 'vgame-meta';
-      const m1 = document.createElement('span');
-      m1.textContent = `回合 ${turns} · ${gameId}`;
-      const m2 = document.createElement('span');
-      m2.textContent = when;
-      meta.append(m1, m2);
-
-      const foot = document.createElement('div');
-      foot.className = 'vgame-foot';
-      const sameBtn = document.createElement('button');
-      sameBtn.type = 'button';
-      sameBtn.className = 'mini-btn';
-      sameBtn.textContent = '同种子开局';
-      sameBtn.addEventListener('click', () => {
-        const givenRadio = document.querySelector('input[name="seedmode"][value="given"]');
-        if (givenRadio) givenRadio.checked = true;
-        if (/^\d+$/.test(String(seed))) $('seed-input').value = String(seed);
-        if (ROLES[roleKey]) {
-          $('opt-role').value = roleKey;
-          $('opt-role').dispatchEvent(new Event('change'));
-        }
-        $('start-btn').scrollIntoView({ behavior: 'smooth', block: 'center' });
-      });
-      foot.appendChild(sameBtn);
-
-      item.append(top, meta, foot);
-      box.appendChild(item);
-    }
+    renderVerifiedGallery();
   } catch (e) {
     box.innerHTML = '<div class="hint">暂时无法拉取已验真列表（不影响离线或正常游玩）。</div>';
   }
+}
+
+async function fetchGameDocById(gameId) {
+  const cfg = globalThis.AIRSTRING_FIREBASE_CONFIG;
+  const project = cfg && cfg.projectId;
+  if (!project || project.startsWith('REPLACE_')) return null;
+  const url = 'https://firestore.googleapis.com/v1/projects/' +
+    encodeURIComponent(project) + '/databases/(default)/documents/games/' +
+    encodeURIComponent(gameId);
+  const r = await fetch(url);
+  if (!r.ok) return null;
+  const doc = await r.json();
+  return doc && doc.fields ? parseGameDoc(doc) : null;
 }
 
 /* ---------------- IndexedDB local persistence (signed-in uid only) ---------------- */
@@ -1906,6 +2084,9 @@ async function startGame(plan) {
     try { sessionStorage.setItem('airstring_last_active_game', gameId); } catch (e) { }
   }
 
+  stopReplayPlayback();
+  R = null;
+  if ($('replay')) $('replay').hidden = true;
   document.body.classList.add('in-game');
   $('setup').hidden = true;
   $('game').hidden = false;
@@ -2035,6 +2216,12 @@ function handleGameOver(status) {
 }
 
 async function showSetup() {
+  stopReplayPlayback();
+  R = null;
+  if ($('replay')) $('replay').hidden = true;
+  if (location.hash && location.hash.startsWith('#replay/')) {
+    try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { }
+  }
   if (S && !S.over && !S.buffering && !S.tabLocked && cloudActive()) {
     saveLocalSnapshot();
     syncActiveToCloud(true);
@@ -2150,6 +2337,579 @@ $('overlay-close-x').addEventListener('click', () => {
 });
 $('btn-refresh-lobby').addEventListener('click', () => loadVerifiedLobby());
 
+/* Phase 2 Gallery filters & search */
+if ($('lobby-filters')) {
+  $('lobby-filters').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-filter]');
+    if (!btn) return;
+    lobbyFilter = btn.dataset.filter || 'all';
+    for (const el of $('lobby-filters').querySelectorAll('button[data-filter]')) {
+      el.classList.toggle('active', el === btn);
+    }
+    renderVerifiedGallery();
+  });
+}
+if ($('lobby-search')) {
+  $('lobby-search').addEventListener('input', () => renderVerifiedGallery());
+}
+
+/* ---------------- Phase 2: YouTube-style Replay Theater + Frame Cache + 1-Click Fork ---------------- */
+let R = null; /* active replay theater session */
+
+function stopReplayPlayback() {
+  if (!R) return;
+  R.playing = false;
+  if (R.playTimer) { clearInterval(R.playTimer); R.playTimer = null; }
+  const btn = $('btn-rep-play');
+  if (btn) btn.textContent = '▶ 播放';
+}
+
+function closeReplay(goSetup = true) {
+  stopReplayPlayback();
+  if (R) {
+    teardownCurrentSession();
+    R = null;
+  }
+  if ($('replay')) $('replay').hidden = true;
+  if (location.hash && location.hash.startsWith('#replay/')) {
+    try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { }
+  }
+  if (goSetup) {
+    $('game').hidden = true;
+    $('setup').hidden = false;
+    document.body.classList.remove('in-game');
+    refreshActiveGames(false);
+    loadVerifiedLobby();
+  }
+}
+
+function renderReplayGrid(frameSnap) {
+  const grid = $('rep-grid');
+  const stage = $('rep-stage');
+  if (!grid || !stage || !frameSnap || !frameSnap.mapRows) return;
+  const sw = Math.max(120, stage.clientWidth - 12);
+  const sh = Math.max(100, stage.clientHeight - 12);
+  const fsW = Math.floor(sw / 80 / 0.605);
+  const fsH = Math.floor(sh / 21 / 1.17);
+  const fs = Math.max(5, Math.min(20, fsW, fsH));
+  grid.style.fontSize = fs + 'px';
+
+  if (grid.children.length !== 21) {
+    grid.innerHTML = '';
+    for (let y = 0; y < 21; y++) {
+      const row = document.createElement('div');
+      row.className = 'row';
+      grid.appendChild(row);
+    }
+  }
+  for (let y = 0; y < 21; y++) {
+    const rowEl = grid.children[y];
+    const line = String(frameSnap.mapRows[y] || '').padEnd(80, ' ');
+    const cols = (frameSnap.mapColors && frameSnap.mapColors[y]) || [];
+    rowEl.innerHTML = '';
+    let runColor = null;
+    let runText = '';
+    const flush = () => {
+      if (!runText) return;
+      const sp = document.createElement('span');
+      sp.className = 'c' + (runColor != null ? runColor : 7);
+      sp.textContent = runText;
+      rowEl.appendChild(sp);
+      runText = '';
+    };
+    for (let x = 0; x < 80; x++) {
+      const ch = line[x];
+      const c = typeof cols[x] === 'number' ? (cols[x] & 0xf) : 7;
+      if (ch === '@') {
+        flush();
+        const hs = document.createElement('span');
+        hs.className = 'c15 hero-at';
+        hs.textContent = '@';
+        rowEl.appendChild(hs);
+        runColor = null;
+      } else if (c === runColor) {
+        runText += ch;
+      } else {
+        flush();
+        runColor = c;
+        runText = ch;
+      }
+    }
+    flush();
+  }
+}
+
+function renderReplayStatus(frameSnap) {
+  const el = $('rep-status');
+  const fill = $('rep-hp-fill');
+  if (!el || !frameSnap) return;
+  el.innerHTML = '';
+  const mk = (cls, txt) => {
+    const s = document.createElement('span');
+    s.className = cls; s.textContent = txt;
+    return s;
+  };
+  const hp = frameSnap.hp ?? 0, hpmax = frameSnap.hpmax ?? 1;
+  const ratio = hpmax > 0 ? Math.max(0, Math.min(1, hp / hpmax)) : 1;
+  const hpCls = ratio <= 0.25 ? 'st-hp-crit' : ratio <= 0.55 ? 'st-hp-warn' : 'st-hp-ok';
+  if (fill) {
+    fill.style.width = Math.round(ratio * 100) + '%';
+    fill.style.background = ratio <= 0.25 ? 'var(--danger)' : ratio <= 0.55 ? 'var(--warn)' : 'var(--ok)';
+  }
+  const roleZh = (ROLES[R && R.game.roleKey] && ROLES[R.game.roleKey].zh) || (R && R.game.roleKey) || '';
+  el.append(
+    mk('st-name', (R && R.game.name) || 'fleck'),
+    mk('st-role', roleZh),
+    mk('st-dlvl', `Dlvl:${frameSnap.dlvl ?? 1}`),
+    mk(hpCls, `HP:${hp}/${hpmax}`),
+    mk('st-pw', `Pw:${frameSnap.pw ?? 0}/${frameSnap.pwmax ?? 0}`),
+    mk('', `AC:${frameSnap.ac ?? 0}`),
+    mk('st-gold', `$:${frameSnap.gold ?? 0}`),
+    mk('', `T:${frameSnap.turn ?? 0}`),
+  );
+}
+
+function renderReplayFrame(idx) {
+  if (!R || !R.frames.length) return;
+  const clamped = Math.max(0, Math.min(R.frames.length - 1, idx));
+  R.curIdx = clamped;
+  const snap = R.frames[clamped];
+  $('rep-msg-prev').textContent = snap.msgPrev || '';
+  $('rep-msg').textContent = snap.msgCur || '';
+  renderReplayGrid(snap);
+  renderReplayStatus(snap);
+
+  const seek = $('rep-seek');
+  if (seek) {
+    seek.max = String(Math.max(0, R.frames.length - 1));
+    seek.value = String(clamped);
+  }
+  const totalTurns = R.frames[R.frames.length - 1].turn || R.frames.length;
+  $('rep-time').textContent = `回合 ${snap.turn} / ${totalTurns}`;
+  const forkBtn = $('btn-rep-fork');
+  if (forkBtn) {
+    forkBtn.disabled = false;
+    forkBtn.textContent = `⚡ 从第 ${snap.turn} 回合分叉由我来打`;
+  }
+}
+
+function startReplayPlayback() {
+  if (!R || !R.frames.length || R.buffering) return;
+  if (R.curIdx >= R.frames.length - 1) renderReplayFrame(0);
+  R.playing = true;
+  $('btn-rep-play').textContent = '⏸ 暂停';
+  if (R.playTimer) clearInterval(R.playTimer);
+  const speed = parseFloat(($('rep-speed') && $('rep-speed').value) || '1') || 1;
+  const intervalMs = Math.max(35, Math.round(360 / speed));
+  R.playTimer = setInterval(() => {
+    if (!R || !R.playing) return;
+    if (R.curIdx >= R.frames.length - 1) {
+      stopReplayPlayback();
+      return;
+    }
+    renderReplayFrame(R.curIdx + 1);
+  }, intervalMs);
+}
+
+function renderReplayPassport(g) {
+  const box = $('rep-passport');
+  if (!box) return;
+  box.innerHTML = '';
+  const kv = (k, v, node) => {
+    const row = document.createElement('div');
+    row.className = 'rep-kv';
+    const ks = document.createElement('span');
+    ks.className = 'k'; ks.textContent = k;
+    row.appendChild(ks);
+    if (node) {
+      row.appendChild(node);
+    } else {
+      const vs = document.createElement('span');
+      vs.className = 'v'; vs.textContent = v;
+      row.appendChild(vs);
+    }
+    box.appendChild(row);
+  };
+  const roleZh = (ROLES[g.roleKey] && ROLES[g.roleKey].zh) || g.roleKey;
+  kv('状态', `✓ 已验真（${g.framesMatched}/${g.framesCompared} 帧）`);
+  kv('角色', `${g.name} · ${roleZh}`);
+  kv('种子', `#${g.seed}（${g.seedSource}）`);
+  kv('最深层数', g.maxDlvl ? `Dlvl ${g.maxDlvl}` : 'Dlvl 1');
+  kv('结局', g.outcome === 'ascended' ? '🏆 飞升' : g.outcome === 'died' ? '💀 阵亡' : '退出/结束');
+  if (g.deathReason) kv('战报', g.deathReason);
+  if (g.recordingSha256) kv('SHA-256', g.recordingSha256.slice(0, 16) + '…');
+  if (g.parentGameId) {
+    const pBtn = document.createElement('button');
+    pBtn.type = 'button';
+    pBtn.className = 'rep-link-btn';
+    pBtn.textContent = `${g.parentGameId} (T${g.forkTurn ?? 0})`;
+    pBtn.addEventListener('click', () => openReplayById(g.parentGameId));
+    kv('分叉来源', '', pBtn);
+  }
+}
+
+async function loadForkTree(gameId) {
+  const box = $('rep-forks-list');
+  if (!box) return;
+  const cfg = globalThis.AIRSTRING_FIREBASE_CONFIG;
+  const project = cfg && cfg.projectId;
+  if (!project || project.startsWith('REPLACE_')) {
+    box.innerHTML = '<div class="hint">本地模式无分叉树索引。</div>';
+    return;
+  }
+  box.innerHTML = '<div class="hint">查询子分叉中…</div>';
+  try {
+    const url = 'https://firestore.googleapis.com/v1/projects/' +
+      encodeURIComponent(project) + '/databases/(default)/documents:runQuery';
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId: 'games' }],
+          where: {
+            compositeFilter: {
+              op: 'AND',
+              filters: [
+                {
+                  fieldFilter: {
+                    field: { fieldPath: 'parentGameId' },
+                    op: 'EQUAL',
+                    value: { stringValue: gameId },
+                  },
+                },
+                {
+                  fieldFilter: {
+                    field: { fieldPath: 'status' },
+                    op: 'EQUAL',
+                    value: { stringValue: 'verified' },
+                  },
+                },
+              ],
+            },
+          },
+          orderBy: [{ field: { fieldPath: 'createdAt' }, direction: 'DESCENDING' }],
+          limit: 20,
+        },
+      }),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const rows = await r.json();
+    const forks = rows
+      .filter((x) => x.document && x.document.fields)
+      .map((x) => parseGameDoc(x.document));
+    if (!forks.length) {
+      box.innerHTML = '<div class="hint">暂无公开已验真分叉。拖动进度条到任意回合，点左侧「分叉由我来打」成为第一条分支！</div>';
+      return;
+    }
+    box.innerHTML = '';
+    for (const fk of forks) {
+      const roleZh = (ROLES[fk.roleKey] && ROLES[fk.roleKey].zh) || fk.roleKey;
+      const item = document.createElement('div');
+      item.className = 'fork-tree-item';
+      const top = document.createElement('div');
+      top.className = 'fork-tree-top';
+      const nm = document.createElement('span');
+      nm.textContent = `${fk.name} · ${roleZh}`;
+      const badge = document.createElement('span');
+      badge.className = 'ag-badge fork';
+      badge.textContent = `从 T${fk.forkTurn ?? 0} 分叉`;
+      top.append(nm, badge);
+
+      const meta = document.createElement('div');
+      meta.className = 'fork-tree-meta';
+      meta.textContent = `Dlvl:${fk.maxDlvl || 1} · 共 ${fk.turns} 回合 · ${fk.deathReason || fk.outcome || '已验真'}`;
+
+      item.append(top, meta);
+      if (fk.publicRecordingPath) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'mini-btn';
+        b.textContent = '▶ 观看此分支';
+        b.addEventListener('click', () => openReplay(fk));
+        item.appendChild(b);
+      }
+      box.appendChild(item);
+    }
+  } catch (e) {
+    box.innerHTML = '<div class="hint">分叉树查询暂不可用（索引构建中或网络不可达）。</div>';
+  }
+}
+
+async function openReplayById(gameId) {
+  const g = await fetchGameDocById(gameId);
+  if (!g) {
+    alert('未找到该公开已验真对局：' + gameId);
+    return;
+  }
+  if (!g.publicRecordingPath) {
+    alert('该历史对局尚未生成公开录像文件。');
+    return;
+  }
+  openReplay(g);
+}
+
+async function openReplay(gameDoc) {
+  if (!gameDoc || !gameDoc.publicRecordingPath) {
+    alert('该对局暂无公开录像。');
+    return;
+  }
+  stopReplayPlayback();
+  teardownCurrentSession();
+  S = null;
+  const sid = activeSessionToken;
+
+  document.body.classList.remove('in-game');
+  $('setup').hidden = true;
+  $('game').hidden = true;
+  $('replay').hidden = false;
+  try { history.replaceState(null, '', '#replay/' + encodeURIComponent(gameDoc.gameId)); } catch (e) { }
+
+  const roleZh = (ROLES[gameDoc.roleKey] && ROLES[gameDoc.roleKey].zh) || gameDoc.roleKey;
+  $('rep-title').textContent = `${gameDoc.name} · ${roleZh} · 种子 #${gameDoc.seed}`;
+  $('rep-badge').textContent = gameDoc.outcome === 'ascended' ? '🏆 飞升 · 已验真'
+    : gameDoc.outcome === 'died' ? '💀 阵亡 · 已验真' : `✓ ${gameDoc.framesMatched} 帧已验真`;
+  $('btn-rep-fork').disabled = true;
+  $('rep-seek').value = '0';
+  $('rep-seek').max = '0';
+  $('rep-time').textContent = '缓冲中…';
+  $('rep-buffer-overlay').hidden = false;
+  $('rep-buffer-title').textContent = '正在缓冲回放帧…';
+  $('rep-buffer-fill').style.width = '5%';
+  $('rep-buffer-detail').textContent = '正在下载公开录像…';
+
+  renderReplayPassport(gameDoc);
+  loadForkTree(gameDoc.gameId);
+
+  R = {
+    sid,
+    game: gameDoc,
+    header: null,
+    turns: [],
+    frames: [],
+    curIdx: 0,
+    playing: false,
+    playTimer: null,
+    buffering: true,
+    curMapRows: null,
+    curMapColors: null,
+    msgs: [],
+  };
+
+  try {
+    const cfg = globalThis.AIRSTRING_FIREBASE_CONFIG || {};
+    const bucket = cfg.storageBucket || ((cfg.projectId || 'airstring-nethack') + '.firebasestorage.app');
+    const dlUrl = 'https://firebasestorage.googleapis.com/v0/b/' +
+      encodeURIComponent(bucket) + '/o/' +
+      encodeURIComponent(gameDoc.publicRecordingPath) + '?alt=media';
+    const resp = await fetch(dlUrl);
+    if (!resp.ok) throw new Error('下载录像失败 HTTP ' + resp.status);
+    const text = await resp.text();
+    if (!R || R.sid !== sid) return;
+
+    const lines = text.split('\n').filter((l) => l.trim());
+    const records = lines.map((l) => JSON.parse(l));
+    const header = records.find((r) => r.k === 'header');
+    const turns = records.filter((r) => r.k === 'turn');
+    if (!header || !turns.length) throw new Error('录像格式异常');
+    R.header = header;
+    R.turns = turns;
+    const replayBytes = concatReplayBytes(records, null);
+
+    $('rep-buffer-detail').textContent = `引擎重放缓存中：0 / ${turns.length} 回合`;
+
+    let pumpStarted = false;
+    function finishReplayBuffer() {
+      if (!R || R.sid !== sid || !R.buffering) return;
+      R.buffering = false;
+      $('rep-buffer-fill').style.width = '100%';
+      $('rep-buffer-overlay').hidden = true;
+      if (typeof globalThis.__airstring_close_keys === 'function') {
+        try { globalThis.__airstring_close_keys(); } catch (e) { }
+      }
+      if (R.frames.length) {
+        renderReplayFrame(0);
+      } else {
+        $('rep-time').textContent = '无可显示帧';
+      }
+    }
+
+    function pumpReplayKeys() {
+      let off = 0;
+      const CHUNK = 48;
+      function step() {
+        if (!R || R.sid !== sid || !R.buffering) return;
+        const q = globalThis.__airstring_key_queue;
+        if (q && q.pos < q.bytes.length) {
+          setTimeout(step, 4);
+          return;
+        }
+        if (off < replayBytes.length) {
+          const end = Math.min(off + CHUNK, replayBytes.length);
+          globalThis.__airstring_push_keys(replayBytes.subarray(off, end));
+          off = end;
+          const pct = Math.min(99, Math.max(5, Math.round((R.frames.length / Math.max(1, turns.length)) * 100)));
+          $('rep-buffer-fill').style.width = pct + '%';
+          $('rep-buffer-detail').textContent = `引擎重放缓存中：${R.frames.length} / ${turns.length} 回合（${pct}%）`;
+          setTimeout(step, 0);
+          return;
+        }
+        setTimeout(() => {
+          if (!R || R.sid !== sid || !R.buffering) return;
+          const q2 = globalThis.__airstring_key_queue;
+          if (q2 && q2.pos < q2.bytes.length) { setTimeout(step, 4); return; }
+          finishReplayBuffer();
+        }, 45);
+      }
+      step();
+    }
+
+    globalThis.__airstring_config = {
+      seed: String(header.seed),
+      date: header.date || FIXED_DATE,
+      options: header.options,
+      mode: 'async',
+      exportPath: '/fleck.frames',
+      rngPath: '/fleck.rng',
+    };
+    globalThis.__airstring_key_queue = { bytes: [], pos: 0, closed: false };
+    globalThis.__airstring_event = (json) => {
+      if (!R || R.sid !== sid) return;
+      let ev;
+      try { ev = JSON.parse(json); } catch (e) { return; }
+      if (ev.t === 'init' && !pumpStarted) {
+        pumpStarted = true;
+        pumpReplayKeys();
+      } else if (ev.t === 'map' && Array.isArray(ev.rows)) {
+        R.curMapRows = ev.rows.slice();
+        R.curMapColors = Array.isArray(ev.colors)
+          ? ev.colors.map((r) => (Array.isArray(r) ? r.slice() : [])) : null;
+      } else if ((ev.t === 'message' || ev.t === 'raw') && ev.text) {
+        R.msgs.push(ev.text);
+        if (R.msgs.length > 20) R.msgs.shift();
+      }
+    };
+    globalThis.__airstring_frame = (frameText) => {
+      if (!R || R.sid !== sid) return;
+      const pf = parseFrame(frameText);
+      const len = R.msgs.length;
+      R.frames.push({
+        turn: pf.turn ?? (R.frames.length + 1),
+        frame: pf.frame ?? R.frames.length,
+        hp: pf.hp, hpmax: pf.hpmax, pw: pf.pw, pwmax: pf.pwmax,
+        ac: pf.ac, xl: pf.xl, gold: pf.gold, dlvl: pf.dlevel,
+        mapRows: R.curMapRows ? R.curMapRows.slice() : null,
+        mapColors: R.curMapColors ? R.curMapColors.map((r) => r.slice()) : null,
+        msgPrev: len >= 2 ? R.msgs[len - 2] : '',
+        msgCur: len >= 1 ? R.msgs[len - 1] : '',
+      });
+    };
+    globalThis.__airstring_rngline = () => { };
+    globalThis.__airstring_game_over = () => {
+      if (R && R.sid === sid && R.buffering) finishReplayBuffer();
+    };
+
+    const { default: createModule } = await import('./nethack.js');
+    await createModule({ print: () => { }, printErr: () => { } });
+  } catch (e) {
+    if (R && R.sid === sid) {
+      $('rep-buffer-title').textContent = '回放加载失败';
+      $('rep-buffer-detail').textContent = String(e && e.message ? e.message : e);
+    }
+  }
+}
+
+function forkFromReplay() {
+  if (!R || !R.frames.length || !R.header) return;
+  const snap = R.frames[R.curIdx];
+  const targetTurn = snap.turn || (R.curIdx + 1);
+  const sliced = R.turns.filter((t) => (t.turn || 0) <= targetTurn);
+  const forkTurn = sliced.length ? (sliced[sliced.length - 1].turn || sliced.length) : 0;
+  const replayBytes = concatReplayBytes(sliced, null);
+  const expectedHashes = sliced.map((t) => t.hash);
+  const hdr = R.header;
+  const parentId = R.game.gameId;
+
+  closeReplay(false);
+  startGame({
+    mode: 'fork',
+    seed: hdr.seed,
+    seedSource: 'fork',
+    options: hdr.options,
+    parentGameId: parentId,
+    forkTurn,
+    replayBytes,
+    expectedTurns: forkTurn,
+    expectedHashes,
+  });
+}
+
+/* Replay controls wiring */
+$('btn-rep-back').addEventListener('click', () => closeReplay(true));
+$('btn-rep-share').addEventListener('click', () => {
+  const url = location.href;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(() => {
+      const b = $('btn-rep-share');
+      b.textContent = '✓ 已复制链接';
+      setTimeout(() => { b.textContent = '🔗 复制链接'; }, 2000);
+    }).catch(() => prompt('复制此回放链接：', url));
+  } else {
+    prompt('复制此回放链接：', url);
+  }
+});
+$('btn-rep-start').addEventListener('click', () => { stopReplayPlayback(); renderReplayFrame(0); });
+$('btn-rep-prev').addEventListener('click', () => { stopReplayPlayback(); if (R) renderReplayFrame(R.curIdx - 1); });
+$('btn-rep-next').addEventListener('click', () => { stopReplayPlayback(); if (R) renderReplayFrame(R.curIdx + 1); });
+$('btn-rep-play').addEventListener('click', () => {
+  if (!R || R.buffering) return;
+  if (R.playing) stopReplayPlayback();
+  else startReplayPlayback();
+});
+$('rep-speed').addEventListener('change', () => {
+  if (R && R.playing) startReplayPlayback();
+});
+$('rep-seek').addEventListener('input', (e) => {
+  stopReplayPlayback();
+  renderReplayFrame(parseInt(e.target.value, 10) || 0);
+});
+$('btn-rep-fork').addEventListener('click', () => forkFromReplay());
+
+document.addEventListener('keydown', (e) => {
+  if (!R || $('replay').hidden) return;
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return;
+  if (e.key === ' ') {
+    e.preventDefault();
+    if (R.playing) stopReplayPlayback(); else startReplayPlayback();
+  } else if (e.key === 'ArrowLeft') {
+    e.preventDefault();
+    stopReplayPlayback();
+    renderReplayFrame(R.curIdx - 1);
+  } else if (e.key === 'ArrowRight') {
+    e.preventDefault();
+    stopReplayPlayback();
+    renderReplayFrame(R.curIdx + 1);
+  } else if (e.key === 'Escape') {
+    closeReplay(true);
+  }
+});
+window.addEventListener('resize', () => {
+  if (R && !R.buffering && R.frames.length && !$('replay').hidden) {
+    renderReplayFrame(R.curIdx);
+  }
+});
+
+/* Deep link: #replay/<gameId> */
+function checkReplayHash() {
+  const m = /^#replay\/(.+)$/.exec(location.hash || '');
+  if (m) {
+    const gid = decodeURIComponent(m[1]);
+    if (!R || R.game.gameId !== gid) openReplayById(gid);
+  }
+}
+window.addEventListener('hashchange', checkReplayHash);
+
 /* after a tap, drop focus from the button so a following Space /
    Enter keypress is a game key, not a second button activation */
 document.addEventListener('click', (e) => {
@@ -2165,6 +2925,7 @@ if (cloud && cloud.onUserChange) {
 } else {
   if ($('guest-banner')) $('guest-banner').hidden = false;
 }
+checkReplayHash();
 
 /* read-only test/inspection hook (used by the S5 gate driver) */
 window.__airstring_debug = {
@@ -2183,4 +2944,5 @@ window.__airstring_debug = {
   } : null,
   records: () => (S ? S.records : []),
 };
+
 
