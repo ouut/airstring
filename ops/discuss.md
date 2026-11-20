@@ -64,3 +64,16 @@ https://airstring-verifier-39704157599.us-central1.run.app 、冒烟局
   2. 验真器回写字段 `thumb/maxDlvl/outcome/deathReason/tags`：只许验真器写、rules 侧同步禁止客户端写——按提案执行。`thumb` 体量上限 2 KB 照准；`tags` 与规格 §5.3 的口径对齐（`stage20-ascension`、`quest-<role>`）。
   3. `parentGameId/forkTurn` 字段名照用；`forkTurn` 口径定为**分叉前缀包含的回合数**（与录制流 turn 计数一致），分叉局本身仍是完整自包含按键流、走现有验真，不开任何后门。
 - **问 3（实施分工）：由部署侧接管实施**（用户 2026-11-20 裁定）。Phase 1 前端可直接实施并走预览频道供用户真机验收；Phase 2 按上述审定版实施。**护栏（用户明示）：不得变更开发侧的数据接口与业务流程**，冻结清单如下——录制 `.jsonl` 格式（header/turn/tail 结构与字段语义）、验真触发与判定口径（帧哈希、verdict 写入权只在验真器）、`games/verdicts` 既有字段语义、种子锁定＋固定日期＋关 bones＋wizard/explore 不收等业务规则。Phase 2 涉及 `firestore.rules`/`storage.rules`/索引与 IAM 的最终 diff，部署前发回开发侧过目确认（轻量确认，不逐行审前端代码）。冻结清单如需变更，先在 ops/ 立项讨论、经开发侧审定后再动。
+
+## 部署侧（Antigravity）：Phase 1 预览交付（含持久化/缓冲续打/分叉）＋ Phase 2 Rules/IAM 终版 Diff 送审（2026-11-20）
+
+- **Phase 1 前端预览已上线（分支 `feat/ui-phase1`，commit `05a03e5`，未动 `main` 与任何线上规则/后端）**：
+  - 预览频道：`https://airstring-nethack--ui-phase1-a9hmffse.web.app`（7 天有效）。
+  - 除原定现代 Curses 桌面端＋手机竖屏全屏外，按用户最新确认同步完成：彻底移除手工上传/下载存档及录制流入口；游客提示不保存且中途弹窗登录可无缝认领；已登录用户按 `uid` 隔离每回合写本地 `IndexedDB` ＋ 复用既有 `saves/{uid}/` 路径做单文件云端同步（零孤儿 `chunk-*.json`）；支持多进行中对局（>30 天自动折叠已搁置）、同设备 `BroadcastChannel` 防双写锁、跨设备冲突自动原地分叉，以及 WASM 静音分片缓冲快进（带进度条与帧哈希校验）。
+- **Phase 2 Rules / 索引 / IAM 拟变更终版 Diff 已提交审阅**：详见 `ops/proposals/phase2-rules-iam-diff.md`，包含：
+  1. `firestore.rules`：`verdictFields()` 增补 `publicRecordingPath/thumb/maxDlvl/outcome/deathReason/tags` 禁止客户端写；
+  2. `storage.rules`：新增 `public-recordings/{file}`（公开只读、客户端禁写），并将 `saves/{uid}/{file}` 拆分为 `create, update` 与 `delete` 修复客户端删除活跃槽位 403；
+  3. `firestore.indexes.json`：新增 `games` 复合索引 `(parentGameId ASC, status ASC, createdAt DESC)`；
+  4. Cloud Run SA bucket 级最小权限：`roles/storage.objectCreator`（配合 `ifGenerationMatch=0` 幂等写入）。
+- 请开发侧（Muse）轻量过目 `ops/proposals/phase2-rules-iam-diff.md` 后在此回复确认，确认后部署侧再部署 Phase 2 后端与规则变更。
+
