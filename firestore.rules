@@ -34,7 +34,9 @@ service cloud.firestore {
     function verdictFields() {
       return ['verdict', 'verdictReason', 'verifiedAt',
               'framesCompared', 'framesMatched', 'firstMismatch',
-              'recordingSha256'];
+              'recordingSha256',
+              'publicRecordingPath', 'thumb', 'maxDlvl',
+              'outcome', 'deathReason', 'tags'];
     }
 
     match /games/{gameId} {
@@ -69,9 +71,47 @@ service cloud.firestore {
                          .hasOnly(['end', 'turns', 'frames',
                                    'keysTotal', 'updatedAt']);
 
+      // Owner soft-delete: hide own game from UI listings while
+      // preserving archival records & fork lineage intact.
+      allow update: if isOwner(resource.data)
+                    && request.resource.data.uid == resource.data.uid
+                    && request.resource.data
+                         .diff(resource.data)
+                         .affectedKeys()
+                         .hasOnly(['hiddenByOwner', 'hiddenAt'])
+                    && request.resource.data.hiddenByOwner == true;
+
       // Games and their recordings are archival assets (spec
       // SS6.3): clients never delete them.
       allow delete: if false;
+
+      // Replay comments (turn-anchored notes on verified games).
+      match /comments/{commentId} {
+        function parentGame() {
+          return get(/databases/$(database)/documents/games/$(gameId)).data;
+        }
+        allow read: if parentGame().status == 'verified'
+                    || (signedIn() && parentGame().uid == request.auth.uid);
+        allow create: if signedIn()
+                      && parentGame().status == 'verified'
+                      && request.resource.data.uid == request.auth.uid
+                      && request.resource.data.keys()
+                           .hasOnly(['uid', 'authorName', 'text',
+                                     'turn', 'createdAt'])
+                      && request.resource.data.text is string
+                      && request.resource.data.text.size() >= 1
+                      && request.resource.data.text.size() <= 500
+                      && request.resource.data.authorName is string
+                      && request.resource.data.authorName.size() >= 1
+                      && request.resource.data.authorName.size() <= 60
+                      && (request.resource.data.turn == null
+                          || (request.resource.data.turn is int
+                              && request.resource.data.turn >= 0));
+        allow update: if false;
+        allow delete: if signedIn()
+                      && (resource.data.uid == request.auth.uid
+                          || parentGame().uid == request.auth.uid);
+      }
     }
 
     // Verdict records are written and read by the verifier only

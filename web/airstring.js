@@ -1,4 +1,4 @@
-/* airstring S5 frontend.
+/* airstring frontend (S5/S6 core + Phase 1 modern Curses & mobile full-screen UI).
  *
  * Renders the S2/S3 window contract event stream, feeds every
  * input -- physical keyboard, action-bar taps, map taps, command
@@ -25,7 +25,7 @@ import { COMMANDS, DIRS, dirByte } from './commands.js';
  * In every other case `cloud` is null (or reports no user) and the
  * upload path below is the S5 local-stub behaviour, unchanged. */
 let cloud = null;
-try { cloud = (await import('./firebase.js')).default; }
+try { cloud = (await import('./firebase.js?v=p2fix2')).default; }
 catch (e) { cloud = null; }
 function cloudActive() { return !!(cloud && cloud.currentUser()); }
 
@@ -51,12 +51,45 @@ const ROLES = {
 const RACE_ZH = { human: '人类', elf: '精灵', dwarf: '矮人', gnome: '侏儒', orc: '兽人' };
 const ALIGN_ZH = { lawful: '守序', neutral: '中立', chaotic: '混沌' };
 
+/* ---------------- UI preferences (mobile zoom & hand flip) ---------------- */
+const mobileMQ = window.matchMedia('(max-width: 768px), (pointer: coarse)');
+function isMobileMode() { return mobileMQ.matches; }
+
+let mobileZoomed = true; /* mobile portrait default: follow-@ zoomed viewport */
+let rightHandPad = false;
+try { rightHandPad = localStorage.getItem('airstring_hand_right') === '1'; } catch (e) { }
+
 function fillSetupForm() {
   const roleSel = $('opt-role'), raceSel = $('opt-race'), alignSel = $('opt-align');
+  const cardsBox = $('role-cards');
+  const lobbyRoleSel = $('lobby-role-filter');
   for (const [k, v] of Object.entries(ROLES)) {
     const o = document.createElement('option');
     o.value = k; o.textContent = v.zh + ' (' + k + ')';
     roleSel.appendChild(o);
+
+    if (lobbyRoleSel) {
+      const fo = document.createElement('option');
+      fo.value = k; fo.textContent = v.zh + ' · ' + k;
+      lobbyRoleSel.appendChild(fo);
+    }
+
+    if (cardsBox) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'role-chip';
+      chip.dataset.role = k;
+      chip.append(document.createTextNode(v.zh));
+      const en = document.createElement('span');
+      en.className = 'en';
+      en.textContent = k;
+      chip.appendChild(en);
+      chip.addEventListener('click', () => {
+        roleSel.value = k;
+        roleSel.dispatchEvent(new Event('change'));
+      });
+      cardsBox.appendChild(chip);
+    }
   }
   roleSel.value = 'valkyrie';
   const sync = () => {
@@ -78,20 +111,582 @@ function fillSetupForm() {
     const g = $('opt-gender');
     if (r.gender) { g.value = r.gender; g.disabled = true; }
     else g.disabled = false;
+    if (cardsBox) {
+      for (const el of cardsBox.children) {
+        el.classList.toggle('active', el.dataset.role === roleSel.value);
+      }
+    }
   };
   roleSel.addEventListener('change', sync);
   sync();
 }
 
+/* ---------------- setup lobby: YouTube-style verified replay gallery ---------------- */
+function parseOptionMap(optStr) {
+  const out = {};
+  for (const part of String(optStr || '').split(',')) {
+    const i = part.indexOf(':');
+    if (i > 0) out[part.slice(0, i).trim()] = part.slice(i + 1).trim();
+  }
+  return out;
+}
+function fsVal(f) {
+  if (!f) return null;
+  if ('stringValue' in f) return f.stringValue;
+  if ('integerValue' in f) return Number(f.integerValue);
+  if ('doubleValue' in f) return Number(f.doubleValue);
+  if ('timestampValue' in f) return f.timestampValue;
+  if ('booleanValue' in f) return f.booleanValue;
+  if ('arrayValue' in f) {
+    return ((f.arrayValue && f.arrayValue.values) || []).map(fsVal);
+  }
+  return null;
+}
+
+function formatRelativeTime(iso) {
+  if (!iso) return '';
+  const ts = Date.parse(iso);
+  if (!Number.isFinite(ts)) return '';
+  const diffSec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (diffSec < 60) return '刚刚';
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)} 分钟前`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} 小时前`;
+  if (diffSec < 7 * 86400) return `${Math.floor(diffSec / 86400)} 天前`;
+  return new Date(ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit' });
+}
+
+function buildClientAsciiThumb(mapRows, mapColors) {
+  if (!Array.isArray(mapRows) || !mapRows.length) return null;
+  const W = 35, H = 11;
+  const colors = Array.isArray(mapColors) ? mapColors : [];
+  let hx = 40, hy = 10;
+  for (let y = 0; y < mapRows.length; y++) {
+    const x = String(mapRows[y] || '').indexOf('@');
+    if (x >= 0) { hx = x; hy = y; break; }
+  }
+  const mapH = Math.min(21, mapRows.length);
+  const x0 = Math.max(0, Math.min(80 - W, hx - Math.floor(W / 2)));
+  const y0 = Math.max(0, Math.min(Math.max(0, mapH - H), hy - Math.floor(H / 2)));
+  const r = [];
+  const c = [];
+  for (let dy = 0; dy < H; dy++) {
+    const my = y0 + dy;
+    const line = String(mapRows[my] || '').padEnd(80, ' ');
+    const cline = Array.isArray(colors[my]) ? colors[my] : [];
+    r.push(line.slice(x0, x0 + W));
+    let cs = '';
+    for (let dx = 0; dx < W; dx++) {
+      const col = cline[x0 + dx];
+      cs += (typeof col === 'number' ? (col & 0xf) : 7).toString(16);
+    }
+    c.push(cs);
+  }
+  const json = JSON.stringify({ w: W, h: H, r, c });
+  return json.length <= 2048 ? json : null;
+}
+
+function parseGameDoc(doc) {
+  const f = (doc && doc.fields) || {};
+  const gameId = fsVal(f.gameId) || (doc.name ? doc.name.split('/').pop() : '');
+  const options = fsVal(f.options) || '';
+  const opts = parseOptionMap(options);
+  return {
+    gameId,
+    uid: fsVal(f.uid) || null,
+    status: fsVal(f.status) || 'verified',
+    hiddenByOwner: !!fsVal(f.hiddenByOwner),
+    seed: String(fsVal(f.seed) ?? '?'),
+    seedSource: fsVal(f.seedSource) || 'given',
+    options,
+    name: opts.name || 'fleck',
+    roleKey: opts.role || 'valkyrie',
+    turns: fsVal(f.turns) ?? 0,
+    frames: fsVal(f.framesMatched) ?? fsVal(f.frames) ?? 0,
+    framesCompared: fsVal(f.framesCompared) ?? fsVal(f.frames) ?? 0,
+    framesMatched: fsVal(f.framesMatched) ?? fsVal(f.frames) ?? 0,
+    createdAt: fsVal(f.createdAt) || '',
+    verifiedAt: fsVal(f.verifiedAt) || '',
+    recordingSha256: fsVal(f.recordingSha256) || '',
+    publicRecordingPath: fsVal(f.publicRecordingPath) || null,
+    thumb: fsVal(f.thumb) || null,
+    maxDlvl: fsVal(f.maxDlvl) ?? null,
+    outcome: fsVal(f.outcome) || null,
+    deathReason: fsVal(f.deathReason) || null,
+    tags: Array.isArray(fsVal(f.tags)) ? fsVal(f.tags) : [],
+    parentGameId: fsVal(f.parentGameId) || null,
+    forkTurn: fsVal(f.forkTurn),
+  };
+}
+
+function normalizePlainGame(d) {
+  const options = d.options || '';
+  const opts = parseOptionMap(options);
+  return {
+    gameId: d.gameId || d.id || '',
+    uid: d.uid || null,
+    status: d.status || 'pending',
+    hiddenByOwner: !!d.hiddenByOwner,
+    seed: String(d.seed ?? '?'),
+    seedSource: d.seedSource || 'given',
+    options,
+    name: opts.name || 'fleck',
+    roleKey: opts.role || 'valkyrie',
+    turns: d.turns ?? 0,
+    frames: d.framesMatched ?? d.frames ?? 0,
+    framesCompared: d.framesCompared ?? d.frames ?? 0,
+    framesMatched: d.framesMatched ?? d.frames ?? 0,
+    createdAt: d.createdAt || '',
+    verifiedAt: d.verifiedAt || '',
+    recordingSha256: d.recordingSha256 || '',
+    publicRecordingPath: d.publicRecordingPath || null,
+    thumb: d.thumb || null,
+    maxDlvl: d.maxDlvl ?? null,
+    outcome: d.outcome || null,
+    deathReason: d.deathReason || null,
+    tags: Array.isArray(d.tags) ? d.tags : [],
+    parentGameId: d.parentGameId || null,
+    forkTurn: d.forkTurn != null ? d.forkTurn : null,
+  };
+}
+
+function renderAsciiThumb(thumbJson) {
+  let obj;
+  try { obj = JSON.parse(thumbJson); } catch (e) { return null; }
+  if (!obj || !Array.isArray(obj.r) || !obj.r.length) return null;
+  const pre = document.createElement('pre');
+  pre.className = 'ascii-thumb';
+  for (let y = 0; y < obj.r.length; y++) {
+    const rowStr = String(obj.r[y] || '');
+    const colStr = String((obj.c && obj.c[y]) || '');
+    const lineDiv = document.createElement('div');
+    let runColor = null;
+    let runText = '';
+    const flush = () => {
+      if (!runText) return;
+      const sp = document.createElement('span');
+      sp.className = 'c' + (runColor != null ? runColor : 7);
+      sp.textContent = runText;
+      lineDiv.appendChild(sp);
+      runText = '';
+    };
+    for (let x = 0; x < rowStr.length; x++) {
+      const ch = rowStr[x];
+      const ci = parseInt(colStr[x] || '7', 16);
+      const c = Number.isFinite(ci) ? (ci & 0xf) : 7;
+      if (ch === '@') {
+        flush();
+        const heroSp = document.createElement('span');
+        heroSp.className = 'c15 hero-at';
+        heroSp.textContent = '@';
+        lineDiv.appendChild(heroSp);
+        runColor = null;
+      } else if (c === runColor) {
+        runText += ch;
+      } else {
+        flush();
+        runColor = c;
+        runText = ch;
+      }
+    }
+    flush();
+    pre.appendChild(lineDiv);
+  }
+  return pre;
+}
+
+function canWatchGame(g) {
+  if (!g) return false;
+  if (g.publicRecordingPath) return true;
+  const u = cloud && cloud.currentUser();
+  return !!(u && g.uid && g.uid === u.uid);
+}
+
+function buildGalleryCard(g, fromPage) {
+  const roleZh = (ROLES[g.roleKey] && ROLES[g.roleKey].zh) || g.roleKey;
+  const when = formatRelativeTime(g.createdAt);
+  const watchable = canWatchGame(g);
+
+  const card = document.createElement('article');
+  card.className = 'vgame-card' + (watchable ? ' clickable' : '');
+  if (watchable) {
+    card.title = '点击观看录像并可从任意回合分叉';
+    card.addEventListener('click', () => openReplay(g, { fromPage }));
+  }
+
+  const thumbWrap = document.createElement('div');
+  thumbWrap.className = 'vgame-thumb-wrap';
+  const pre = g.thumb ? renderAsciiThumb(g.thumb) : null;
+  if (pre) {
+    thumbWrap.appendChild(pre);
+  } else {
+    const ph = document.createElement('div');
+    ph.className = 'ascii-thumb-placeholder';
+    ph.textContent = `@  #${g.seed}\n${g.name} · ${roleZh}`;
+    thumbWrap.appendChild(ph);
+  }
+
+  const outPill = document.createElement('span');
+  outPill.className = 'thumb-pill-tl' +
+    (g.outcome === 'ascended' ? ' ascended' : g.outcome === 'died' ? ' died' : '');
+  outPill.textContent = g.status === 'pending' ? '⏳ 验真中'
+    : g.status === 'rejected' ? '✗ 未通过'
+    : g.outcome === 'ascended' ? '🏆 飞升'
+    : g.outcome === 'died' ? '💀 阵亡'
+    : g.parentGameId ? '⚡ 分叉' : '✓ 已验真';
+  thumbWrap.appendChild(outPill);
+
+  const framePill = document.createElement('span');
+  framePill.className = 'thumb-pill-tr';
+  framePill.textContent = g.status === 'verified' ? `✓ ${g.framesMatched} 帧` : `${g.frames} 帧`;
+  thumbWrap.appendChild(framePill);
+
+  const statPill = document.createElement('span');
+  statPill.className = 'thumb-pill-br';
+  statPill.textContent = (g.maxDlvl ? `Dlvl:${g.maxDlvl} · ` : '') + `T:${g.turns}`;
+  thumbWrap.appendChild(statPill);
+
+  const body = document.createElement('div');
+  body.className = 'vgame-body';
+
+  const top = document.createElement('div');
+  top.className = 'vgame-top';
+  const title = document.createElement('span');
+  title.textContent = `${roleZh} · ${g.name}`;
+  top.appendChild(title);
+  if (g.parentGameId) {
+    const fb = document.createElement('span');
+    fb.className = 'ag-badge fork';
+    fb.textContent = `⚡ T${g.forkTurn ?? 0}`;
+    top.appendChild(fb);
+  }
+  const seedTag = document.createElement('span');
+  seedTag.className = 'vgame-seed-tag';
+  seedTag.textContent = `#${g.seed}`;
+  top.appendChild(seedTag);
+
+  const subRow = document.createElement('div');
+  subRow.className = 'vgame-subrow';
+  const rs = document.createElement('span');
+  rs.className = 'vgame-reason';
+  rs.textContent = g.deathReason || (g.status === 'pending' ? '后台自动验真中…' : g.gameId);
+  rs.title = rs.textContent;
+  const wh = document.createElement('span');
+  wh.className = 'vgame-when';
+  wh.textContent = when;
+  subRow.append(rs, wh);
+
+  body.append(top, subRow);
+
+  /* Only in "对局" (My Games) show subtle soft-delete link */
+  if (fromPage === 'mygames') {
+    const acts = document.createElement('div');
+    acts.className = 'card-corner-actions';
+    const bDel = document.createElement('button');
+    bDel.type = 'button';
+    bDel.className = 'card-link-act danger';
+    bDel.textContent = '删除';
+    bDel.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm(`确定删除（隐藏）「${roleZh} · ${g.name}（T${g.turns}）」？隐藏后将不再在大厅和对局列表显示。`)) return;
+      try {
+        await cloud.softDeleteGame(g.gameId);
+        verifiedGamesCache = verifiedGamesCache.filter((x) => x.gameId !== g.gameId);
+        renderVerifiedGallery();
+        card.remove();
+        refreshMyGamesPage(true);
+      } catch (err) {
+        alert('删除失败（若规则刚提交审核请稍后再试）：' + (err && err.message ? err.message : err));
+      }
+    });
+    acts.appendChild(bDel);
+    body.appendChild(acts);
+  }
+
+  card.append(thumbWrap, body);
+  return card;
+}
+
+let verifiedGamesCache = [];
+let lastLobbyFetchAt = 0;
+let lobbyFilter = 'all';
+
+function renderVerifiedGallery() {
+  const box = $('verified-list');
+  if (!box) return;
+  const q = (($('lobby-search') && $('lobby-search').value) || '').trim().toLowerCase();
+  const roleF = ($('lobby-role-filter') && $('lobby-role-filter').value) || 'all';
+  const sortBy = ($('lobby-sort') && $('lobby-sort').value) || 'newest';
+
+  const list = verifiedGamesCache.filter((g) => {
+    if (g.hiddenByOwner) return false;
+    if (lobbyFilter === 'ascended' && g.outcome !== 'ascended') return false;
+    if (lobbyFilter === 'died' && g.outcome !== 'died') return false;
+    if (lobbyFilter === 'fork' && !g.parentGameId) return false;
+    if (lobbyFilter === 'deep' && (g.maxDlvl || 1) < 10) return false;
+    if (roleF !== 'all' && g.roleKey !== roleF) return false;
+    if (q) {
+      const roleZh = (ROLES[g.roleKey] && ROLES[g.roleKey].zh) || '';
+      const hay = `${g.name} ${g.roleKey} ${roleZh} ${g.seed} ${g.gameId} ${g.deathReason || ''}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  if (sortBy === 'dlvl') {
+    list.sort((a, b) => ((b.maxDlvl || 1) - (a.maxDlvl || 1)) || ((b.turns || 0) - (a.turns || 0)));
+  } else if (sortBy === 'turns') {
+    list.sort((a, b) => (b.turns || 0) - (a.turns || 0));
+  } else {
+    list.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  }
+
+  if (!list.length) {
+    box.innerHTML = '<div class="hint">没有匹配筛选条件的公开已验真对局。</div>';
+    return;
+  }
+
+  box.innerHTML = '';
+  for (const g of list) {
+    box.appendChild(buildGalleryCard(g, 'setup'));
+  }
+}
+
+async function loadVerifiedLobby(force = false) {
+  const box = $('verified-list');
+  if (!box) return;
+  const cfg = globalThis.AIRSTRING_FIREBASE_CONFIG;
+  const project = cfg && cfg.projectId;
+  if (!project || project.startsWith('REPLACE_')) {
+    box.innerHTML = '<div class="hint">本地桩模式：未连接云端录像大厅。</div>';
+    return;
+  }
+  /* 30-second cache throttle to protect Firestore read quota */
+  if (!force && verifiedGamesCache.length && (Date.now() - lastLobbyFetchAt < 30000)) {
+    renderVerifiedGallery();
+    return;
+  }
+  if (!verifiedGamesCache.length) {
+    box.innerHTML = '<div class="hint">加载公开已验真录像…</div>';
+  }
+  try {
+    const url = 'https://firestore.googleapis.com/v1/projects/' +
+      encodeURIComponent(project) + '/databases/(default)/documents:runQuery';
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId: 'games' }],
+          where: {
+            fieldFilter: {
+              field: { fieldPath: 'status' },
+              op: 'EQUAL',
+              value: { stringValue: 'verified' },
+            },
+          },
+          orderBy: [{ field: { fieldPath: 'createdAt' }, direction: 'DESCENDING' }],
+          limit: 24,
+        },
+      }),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const rows = await r.json();
+    lastLobbyFetchAt = Date.now();
+    verifiedGamesCache = rows
+      .filter((x) => x.document && x.document.fields)
+      .map((x) => parseGameDoc(x.document))
+      .filter((g) => !g.hiddenByOwner);
+    if (!verifiedGamesCache.length) {
+      box.innerHTML = '<div class="hint">暂无公开已验真对局，往下滚动开一局成为第一人！</div>';
+      return;
+    }
+    renderVerifiedGallery();
+  } catch (e) {
+    if (!verifiedGamesCache.length) {
+      box.innerHTML = '<div class="hint">暂时无法拉取已验真列表（不影响离线或正常游玩）。</div>';
+    }
+  }
+}
+
+async function fetchGameDocById(gameId) {
+  const cfg = globalThis.AIRSTRING_FIREBASE_CONFIG;
+  const project = cfg && cfg.projectId;
+  if (!project || project.startsWith('REPLACE_')) return null;
+  const url = 'https://firestore.googleapis.com/v1/projects/' +
+    encodeURIComponent(project) + '/databases/(default)/documents/games/' +
+    encodeURIComponent(gameId);
+  const r = await fetch(url);
+  if (!r.ok) return null;
+  const doc = await r.json();
+  return doc && doc.fields ? parseGameDoc(doc) : null;
+}
+
+/* ---------------- IndexedDB local persistence (signed-in uid only) ---------------- */
+const IDB_NAME = 'airstring_active_v1';
+const IDB_STORE = 'games';
+const SHELVE_AGE_MS = 30 * 24 * 3600 * 1000; /* 30 days */
+const MAX_ACTIVE_SOFT_CAP = 50;
+
+let idbPromise = null;
+function openIdb() {
+  if (idbPromise) return idbPromise;
+  idbPromise = new Promise((resolve, reject) => {
+    if (!globalThis.indexedDB) { resolve(null); return; }
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) {
+        const st = db.createObjectStore(IDB_STORE, { keyPath: 'pk' });
+        st.createIndex('by_uid', 'uid', { unique: false });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => resolve(null);
+  });
+  return idbPromise;
+}
+async function idbPutGame(uid, snap) {
+  if (!uid || !snap || !snap.gameId) return;
+  const db = await openIdb();
+  if (!db) return;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).put({ ...snap, uid, pk: uid + ':' + snap.gameId });
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+    } catch (e) { resolve(false); }
+  });
+}
+async function idbGetGame(uid, gameId) {
+  if (!uid || !gameId) return null;
+  const db = await openIdb();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const req = tx.objectStore(IDB_STORE).get(uid + ':' + gameId);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    } catch (e) { resolve(null); }
+  });
+}
+async function idbListGames(uid) {
+  if (!uid) return [];
+  const db = await openIdb();
+  if (!db) return [];
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const idx = tx.objectStore(IDB_STORE).index('by_uid');
+      const req = idx.getAll(uid);
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => resolve([]);
+    } catch (e) { resolve([]); }
+  });
+}
+async function idbDeleteGame(uid, gameId) {
+  if (!uid || !gameId) return;
+  const db = await openIdb();
+  if (!db) return;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).delete(uid + ':' + gameId);
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+    } catch (e) { resolve(false); }
+  });
+}
+
+/* ---------------- same-device multi-tab lock (BroadcastChannel) ---------------- */
+const TAB_ID = (crypto.randomUUID ? crypto.randomUUID()
+  : ('tab-' + Date.now() + '-' + Math.random().toString(16).slice(2)));
+const tabChannel = (typeof BroadcastChannel !== 'undefined')
+  ? new BroadcastChannel('airstring_session_lock') : null;
+
+function broadcastTabClaim(gameId) {
+  if (!tabChannel || !gameId) return;
+  try { tabChannel.postMessage({ type: 'claim', gameId, tabId: TAB_ID }); } catch (e) { }
+}
+if (tabChannel) {
+  tabChannel.onmessage = (ev) => {
+    const msg = ev && ev.data;
+    if (!msg || msg.type !== 'claim' || msg.tabId === TAB_ID) return;
+    if (S && !S.over && S.id === msg.gameId) {
+      S.tabLocked = true;
+      const ov = $('tab-lock-overlay');
+      if (ov) ov.hidden = false;
+    }
+  };
+}
+
+let toastTimer = null;
+function showToast(text, durationMs = 4200) {
+  const el = $('game-toast');
+  if (!el) return;
+  el.textContent = text;
+  el.hidden = false;
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, durationMs);
+}
+
+function b64ToBytes(b64) {
+  if (!b64) return new Uint8Array(0);
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i) & 0xff;
+  return out;
+}
+function concatReplayBytes(records, pendingKeys) {
+  const parts = [];
+  let total = 0;
+  for (const r of records || []) {
+    if (r && (r.k === 'turn' || r.k === 'tail') && r.keys) {
+      const b = b64ToBytes(r.keys);
+      if (b.length) { parts.push(b); total += b.length; }
+    }
+  }
+  if (Array.isArray(pendingKeys) && pendingKeys.length) {
+    const pb = Uint8Array.from(pendingKeys, (v) => v & 0xff);
+    parts.push(pb); total += pb.length;
+  }
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const p of parts) { out.set(p, off); off += p.length; }
+  return out;
+}
+
 /* ---------------- session state ---------------- */
-let S = null;            /* active session or null */
-let pendingImport = null; /* {name, bytes:Uint8Array} */
+let S = null; /* active session or null */
+let activeSessionToken = 0;
+let autoResumeAttempted = false;
+let localSaveTimer = null;
 
 function newSession(cfg) {
   return {
+    sid: cfg.sid,
     id: cfg.gameId, seed: cfg.seed, seedSource: cfg.seedSource,
     date: FIXED_DATE, options: cfg.options,
+    startedAt: cfg.startedAt || new Date().toISOString(),
+    parentGameId: cfg.parentGameId || null,
+    forkTurn: cfg.forkTurn != null ? cfg.forkTurn : null,
+    sessionId: (crypto.randomUUID ? crypto.randomUUID()
+      : ('ses-' + Date.now() + '-' + Math.random().toString(16).slice(2))),
     started: false, over: false, overStatus: null, exited: false,
+    tabLocked: false,
+    /* buffer fast-forward state */
+    buffering: !!cfg.buffering,
+    bufferMode: cfg.bufferMode || null, /* 'resume' | 'fork' */
+    bufferTargetTurns: cfg.bufferTargetTurns || 0,
+    bufferTotalBytes: cfg.bufferTotalBytes || 0,
+    bufferFedBytes: 0,
+    bufferExpectedHashes: cfg.bufferExpectedHashes || [],
+    bufferHashMismatch: false,
+    bufferReplayBytes: cfg.bufferReplayBytes || null,
+    bufferPumpStarted: false,
+    logBuffer: [],
+    lastTextEv: null,
     /* UI state derived from contract events */
     prompt: null,        /* {kind:'yn'|'line', q, choices, def} */
     menu: null,          /* last menu event */
@@ -103,9 +698,12 @@ function newSession(cfg) {
     lastFrame: null, statusLines: null,
     messages: [],
     counters: { more: 0, menu: 0, yn: 0, line: 0, dir: 0, text: 0, keys: 0 },
-    /* recorder */
+    /* recorder & sync */
     pendingKeys: [], records: [], recSeq: 0, keysTotal: 0, rngLines: 0,
-    uploadTimer: null, uploadChain: Promise.resolve(),
+    dirtyCloud: false, lastCloudTurns: cfg.baseCloudTurns || 0,
+    lastCloudSyncAt: 0, syncChain: Promise.resolve(),
+    cloudSyncStatus: '',
+    uploadOk: 0, uploadFailed: false,
     saves: [],
   };
 }
@@ -113,6 +711,7 @@ function newSession(cfg) {
 function uiMode() {
   if (!S) return 'boot';
   if (S.over) return 'over';
+  if (S.buffering) return 'boot';
   if (S.prompt && S.prompt.kind === 'line') return 'line';
   if (S.prompt && S.prompt.dirPrompt) return 'dirprompt';
   if (S.prompt && S.prompt.kind === 'yn' && S.prompt.choices == null) return 'objprompt';
@@ -126,9 +725,35 @@ function uiMode() {
   return 'main';
 }
 
+/* ---------------- drawers & overlays helpers ---------------- */
+function toggleMsgLog(open) {
+  const el = $('msglog-drawer');
+  if (!el) return;
+  const next = open == null ? el.hidden : !!open;
+  el.hidden = !next;
+  if (next) {
+    const log = $('msglog');
+    log.scrollTop = log.scrollHeight;
+  }
+  const btn = document.querySelector('#actionbar button.log-toggle-btn');
+  if (btn) {
+    btn.classList.toggle('log-open', next);
+    btn.textContent = next ? '日志 ▴' : '日志 ▾';
+  }
+}
+function toggleGameDrawer(open) {
+  const el = $('game-drawer');
+  if (!el) return;
+  const next = open == null ? el.hidden : !!open;
+  el.hidden = !next;
+  if (next) updateDrawerSyncBanner();
+}
+
 /* ---------------- the one input funnel ---------------- */
 function sendBytes(data) {
-  if (!S || S.over) return;
+  if (!S || S.over || S.buffering || S.tabLocked) return;
+  /* auto-close message history drawer on any gameplay input */
+  if ($('msglog-drawer') && !$('msglog-drawer').hidden) toggleMsgLog(false);
   const bytes = typeof data === 'string'
     ? Array.from(data, (c) => c.charCodeAt(0) & 0xff)
     : Array.from(data, (b) => b & 0xff);
@@ -154,49 +779,81 @@ function dirByteAll() {
 }
 function sendKey(ch) { sendBytes(ch); }
 
+/* ---------------- 2-line message bar (same on desktop & mobile) ---------------- */
+function renderMessages() {
+  const prevEl = $('msg-prev');
+  const curEl = $('msg');
+  if (!S) {
+    if (prevEl) prevEl.textContent = '';
+    if (curEl) curEl.textContent = '';
+    return;
+  }
+  const len = S.messages.length;
+  const latest = len >= 1 ? S.messages[len - 1] : '';
+  const prev = len >= 2 ? S.messages[len - 2] : '';
+  if (prevEl) prevEl.textContent = prev;
+  curEl.innerHTML = '';
+  curEl.append(document.createTextNode(latest));
+  if (S.moreActive) {
+    const m = document.createElement('span');
+    m.className = 'moreflag';
+    m.textContent = ' --More--';
+    curEl.appendChild(m);
+  }
+}
+
 /* ---------------- contract event handling ---------------- */
 function handleEvent(json) {
   if (!S) return;
   let ev;
   try { ev = JSON.parse(json); } catch (e) { return; }
+  const fast = !!S.buffering;
   (S.eventTail = S.eventTail || []).push(ev.t);
   if (S.eventTail.length > 40) S.eventTail.shift();
-  /* a text window ends when its dmore dismissal key has been
-     consumed and the next event is not another text page; no map
-     event is guaranteed to follow (an "Unknown command" turn does
-     not dirty the map), so the close is resolved here */
   if (S.textClosePending && ev.t !== 'key') {
-    if (ev.t !== 'text') { S.textActive = false; hideOverlay(); }
+    if (ev.t !== 'text') { S.textActive = false; if (!fast) hideOverlay(); }
     S.textClosePending = false;
   }
   switch (ev.t) {
-    case 'init': S.started = true; break;
+    case 'init':
+      S.started = true;
+      if (S.buffering && !S.bufferPumpStarted) {
+        S.bufferPumpStarted = true;
+        pumpBuffer(S.sid);
+      }
+      break;
     case 'map': onMap(ev); break;
     case 'status':
       if (ev.lines && ev.lines.length) S.statusLines = ev.lines;
-      renderStatus();
+      if (!fast) renderStatus();
       break;
     case 'message':
       S.messages.push(ev.text);
-      $('msg').textContent = ev.text;
-      appendLog(ev.text);
+      if (S.messages.length > 300) S.messages.shift();
+      if (fast) {
+        S.logBuffer.push(ev.text);
+        if (S.logBuffer.length > 200) S.logBuffer.shift();
+      } else {
+        renderMessages();
+        appendLog(ev.text);
+      }
       break;
     case 'raw':
       S.messages.push(ev.text);
-      appendLog('[!] ' + ev.text);
+      if (S.messages.length > 300) S.messages.shift();
+      if (fast) {
+        S.logBuffer.push('[!] ' + ev.text);
+        if (S.logBuffer.length > 200) S.logBuffer.shift();
+      } else {
+        renderMessages();
+        appendLog('[!] ' + ev.text);
+      }
       break;
     case 'more':
       S.moreActive = true; S.counters.more++;
-      $('msg').innerHTML = '';
-      $('msg').append(document.createTextNode(S.messages[S.messages.length - 1] || ''));
-      const m = document.createElement('span');
-      m.className = 'moreflag'; m.textContent = ' --More--';
-      $('msg').append(m);
+      if (!fast) renderMessages();
       break;
     case 'prompt':
-      /* this build also surfaces direction questions as prompts
-         (kind yn, choices null, "In what direction?") -- classify
-         them as direction prompts, not object selections */
       if (ev.kind === 'yn' && ev.choices == null &&
           /direction/i.test(ev.q || '')) {
         ev.dirPrompt = true;
@@ -204,51 +861,68 @@ function handleEvent(json) {
       }
       S.prompt = ev;
       if (ev.kind === 'yn') S.counters.yn++;
-      if (ev.kind === 'line') { S.counters.line++; showLineBar(ev.q); }
+      if (ev.kind === 'line') {
+        S.counters.line++;
+        if (!fast) showLineBar(ev.q);
+      }
+      if (ev.q) {
+        S.messages.push(ev.q);
+        if (S.messages.length > 300) S.messages.shift();
+        if (!fast) renderMessages();
+      }
       break;
     case 'prompt-end':
-      if (S.prompt && S.prompt.kind === 'line') hideLineBar();
+      if (S.prompt && S.prompt.kind === 'line' && !fast) hideLineBar();
       S.prompt = null;
       S.expectingDir = null;
       if (S.dirAfterLine) { S.expectingDir = '#'; S.dirAfterLine = false; }
       break;
     case 'menu':
       S.menu = ev; S.counters.menu++;
-      renderMenu(ev);
+      if (!fast) renderMenu(ev);
       break;
     case 'menu-end':
-      S.menu = null; hideOverlay();
+      S.menu = null;
+      if (!fast) hideOverlay();
       break;
     case 'text':
       S.textActive = true; S.counters.text++;
-      renderText(ev);
+      S.lastTextEv = ev;
+      if (!fast) renderText(ev);
       break;
     case 'getret': S.getretActive = true; break;
     case 'askname':
       S.prompt = { kind: 'line', q: '你的名字？' };
-      S.counters.line++; showLineBar('你的名字？');
+      S.counters.line++;
+      if (!fast) showLineBar('你的名字？');
       break;
     case 'rip':
       S.ripActive = true;
-      showOverlay('R.I.P.', null);
+      if (!fast) showOverlay('R.I.P.', null, 'rip');
       break;
     case 'key':
       S.counters.keys++;
       if (ev.src === 'queue') {
         S.pendingKeys.push(ev.code & 0xff);
         S.keysTotal++;
+        if (!fast && !S.tabLocked && cloudActive()) {
+          S.dirtyCloud = true;
+          scheduleLocalSave();
+        }
       }
       if (S.moreActive) {
         if (S.textActive) S.textClosePending = true;
         S.moreActive = false;
+        if (!fast) renderMessages();
       }
       if (S.getretActive) S.getretActive = false;
       break;
     case 'exit': S.exited = true; break;
   }
-  renderBar();
+  if (!fast) renderBar();
 }
 
+/* ---------------- map viewport: full 80x21 + mobile follow-@ zoom ---------------- */
 function onMap(ev) {
   const prev = S.mapRows, prevHero = S.heroPos;
   S.mapRows = ev.rows; S.mapColors = ev.colors;
@@ -259,85 +933,175 @@ function onMap(ev) {
   }
   if (hero) {
     if (prev && prevHero && (hero.x !== prevHero.x || hero.y !== prevHero.y)) {
-      /* the cell the hero just stepped onto was visible in the
-         previous snapshot */
       const under = prev[hero.y] && prev[hero.y][hero.x];
       if (under && under !== '@') S.underHero = under;
     }
     S.heroPos = hero;
   }
-  if (S.textActive && !S.ripActive) { S.textActive = false; hideOverlay(); }
-  renderGrid();
+  if (S.textActive && !S.ripActive) {
+    S.textActive = false;
+    if (!S.buffering) hideOverlay();
+  }
+  if (!S.buffering) renderGrid();
 }
 
+function updateZoomButton() {
+  const btn = $('btn-zoom');
+  if (!btn) return;
+  const show = !!S && !S.over && isMobileMode();
+  btn.hidden = !show;
+  if (show) {
+    btn.textContent = mobileZoomed ? '🗺 全图' : '◎ 跟随';
+  }
+}
+
+let lastGridDims = '';
 function renderGrid() {
   const grid = $('grid');
-  if (!S || !S.mapRows) return;
-  if (!grid.children.length) {
-    for (let y = 0; y < 21; y++) {
+  const stage = $('stage');
+  if (!S || !S.mapRows || !grid || !stage) return;
+  updateZoomButton();
+
+  const sw = Math.max(120, stage.clientWidth - 8);
+  const sh = Math.max(100, stage.clientHeight - 8);
+  const useZoom = isMobileMode() && mobileZoomed && S.heroPos;
+
+  let x0 = 0, y0 = 0, viewW = 80, viewH = 21, fs = 14;
+  if (useZoom) {
+    /* Crisp ~15.5px font on mobile portrait, hard-snapped centered on @ */
+    fs = Math.max(13, Math.min(17, Math.floor(sw / 25 / 0.61)));
+    viewW = Math.max(20, Math.min(80, Math.floor(sw / (fs * 0.61))));
+    viewH = Math.max(11, Math.min(21, Math.floor(sh / (fs * 1.16))));
+    x0 = Math.max(0, Math.min(80 - viewW, S.heroPos.x - Math.floor(viewW / 2)));
+    y0 = Math.max(0, Math.min(21 - viewH, S.heroPos.y - Math.floor(viewH / 2)));
+  } else {
+    const fsW = Math.floor(sw / 80 / 0.605);
+    const fsH = Math.floor(sh / 21 / 1.17);
+    fs = Math.max(6, Math.min(24, fsW, fsH));
+  }
+
+  grid.style.fontSize = fs + 'px';
+  const dimKey = viewW + 'x' + viewH;
+  if (dimKey !== lastGridDims || grid.children.length !== viewH) {
+    lastGridDims = dimKey;
+    grid.innerHTML = '';
+    for (let vy = 0; vy < viewH; vy++) {
       const row = document.createElement('div');
       row.className = 'row';
-      for (let x = 0; x < 80; x++) {
+      for (let vx = 0; vx < viewW; vx++) {
         const c = document.createElement('span');
-        c.dataset.x = x; c.dataset.y = y;
         c.textContent = ' ';
         row.appendChild(c);
       }
       grid.appendChild(row);
     }
   }
-  for (let y = 0; y < 21; y++) {
-    const chars = S.mapRows[y] || '';
-    const colors = (S.mapColors && S.mapColors[y]) || [];
-    const rowEl = grid.children[y];
-    for (let x = 0; x < 80; x++) {
-      const cell = rowEl.children[x];
-      const ch = chars[x] || ' ';
+
+  for (let vy = 0; vy < viewH; vy++) {
+    const mapY = y0 + vy;
+    const chars = S.mapRows[mapY] || '';
+    const colors = (S.mapColors && S.mapColors[mapY]) || [];
+    const rowEl = grid.children[vy];
+    for (let vx = 0; vx < viewW; vx++) {
+      const mapX = x0 + vx;
+      const cell = rowEl.children[vx];
+      cell.dataset.x = mapX;
+      cell.dataset.y = mapY;
+      const ch = chars[mapX] || ' ';
       if (cell.textContent !== ch) cell.textContent = ch;
-      const cls = 'c' + (((colors[x] | 0) & 0x1f) % 16);
+      const isHero = S.heroPos && mapX === S.heroPos.x && mapY === S.heroPos.y && ch === '@';
+      const cls = isHero
+        ? 'hero-cell'
+        : ('c' + (((colors[mapX] | 0) & 0x1f) % 16));
       if (cell.className !== cls) cell.className = cls;
     }
   }
-  fitGridFont();
 }
 
-function fitGridFont() {
-  const grid = $('grid');
-  if (!grid.clientWidth) return;
-  const fs = Math.max(8, Math.floor((grid.clientWidth - 10) / 80 / 0.601));
-  grid.style.fontSize = fs + 'px';
-}
-window.addEventListener('resize', fitGridFont);
+let resizeRaf = 0;
+window.addEventListener('resize', () => {
+  if (resizeRaf) cancelAnimationFrame(resizeRaf);
+  resizeRaf = requestAnimationFrame(() => {
+    renderGrid();
+    renderBar();
+  });
+});
 
-/* status: contract `status` events win when present; in the
-   current build they never fire (see REPORT), so the streamed
-   frame's [hero] fields are the working source. */
+/* ---------------- statushilites HUD + 2px HP bar ---------------- */
+function makeSpan(cls, text) {
+  const s = document.createElement('span');
+  if (cls) s.className = cls;
+  s.textContent = text;
+  return s;
+}
 function renderStatus() {
   const el = $('status');
-  if (!S) { el.textContent = ''; return; }
-  if (S.statusLines) { el.textContent = S.statusLines.join('\n'); return; }
+  const barFill = $('hp-bar-fill');
+  if (!el) return;
+  if (!S) {
+    el.textContent = '';
+    if (barFill) barFill.style.width = '0%';
+    return;
+  }
+  if (S.statusLines) {
+    el.textContent = S.statusLines.join('  ');
+    return;
+  }
   const f = S.lastFrame;
-  if (!f) { el.textContent = ''; return; }
+  el.innerHTML = '';
+  if (!f) {
+    el.append(
+      makeSpan('st-name', S.playerName || 'fleck'),
+      makeSpan('st-role', S.roleEn || ''),
+      makeSpan('', '启动中…')
+    );
+    if (barFill) { barFill.style.width = '100%'; barFill.style.background = 'var(--ok)'; }
+    return;
+  }
+  const hp = f.hp ?? 0, hpmax = Math.max(1, f.hpmax ?? 1);
+  const pct = Math.max(0, Math.min(100, Math.round((hp / hpmax) * 100)));
+  const hpCls = pct <= 25 ? 'st-hp-crit' : pct <= 55 ? 'st-hp-warn' : 'st-hp-ok';
+  const barCol = pct <= 25 ? 'var(--danger)' : pct <= 55 ? 'var(--warn)' : 'var(--ok)';
+  if (barFill) { barFill.style.width = pct + '%'; barFill.style.background = barCol; }
+
   const hungerWord = f.hunger == null ? '' :
     f.hunger < 0 ? '昏厥' : f.hunger < 50 ? '虚弱' :
     f.hunger < 150 ? '饥饿' : f.hunger > 1000 ? '饱足' : '';
-  el.textContent =
-    `${f.name}  ${f.role}  Dlvl:${f.dlevel}  $:${f.gold}  HP:${f.hp}/${f.hpmax}` +
-    `  Pw:${f.pw}/${f.pwmax}  AC:${f.ac}\n` +
-    `XL:${f.xl}  回合:${f.moves}  ${hungerWord}`;
+  const hungerCrit = f.hunger != null && f.hunger < 50;
+
+  el.append(
+    makeSpan('st-name', f.name || S.playerName || ''),
+    makeSpan('st-role', f.role || S.roleEn || ''),
+    makeSpan(hpCls, `HP:${f.hp}/${f.hpmax}`),
+    makeSpan('st-pw', `Pw:${f.pw}/${f.pwmax}`),
+    makeSpan('', `AC:${f.ac}`),
+    makeSpan('st-dlvl', `Dlvl:${f.dlevel}`),
+    makeSpan('st-gold', `$:${f.gold}`),
+    makeSpan('', `XL:${f.xl}`),
+    makeSpan('', `T:${f.moves}`)
+  );
+  if (hungerWord) {
+    el.append(makeSpan('st-hunger' + (hungerCrit ? ' crit' : ''), hungerWord));
+  }
 }
 
 function appendLog(text) {
   const log = $('msglog');
+  if (!log) return;
   const div = document.createElement('div');
   div.textContent = text;
   log.appendChild(div);
   while (log.children.length > 200) log.removeChild(log.firstChild);
+  if ($('msglog-drawer') && !$('msglog-drawer').hidden) {
+    log.scrollTop = log.scrollHeight;
+  }
 }
 
-/* ---------------- overlays: menu / text ---------------- */
-function showOverlay(title, bodyPre) {
-  $('overlay').hidden = false;
+/* ---------------- true overlays: Curses right menu / centered text ---------------- */
+function showOverlay(title, bodyPre, kind) {
+  const ov = $('overlay');
+  ov.hidden = false;
+  ov.classList.toggle('mode-menu', kind === 'menu');
   $('overlay-title').textContent = title || '';
   const body = $('overlay-body');
   body.innerHTML = '';
@@ -350,7 +1114,9 @@ function showOverlay(title, bodyPre) {
   return body;
 }
 function hideOverlay() {
-  $('overlay').hidden = true;
+  const ov = $('overlay');
+  ov.hidden = true;
+  ov.classList.remove('mode-menu');
   $('overlay-body').innerHTML = '';
   $('overlay-actions').innerHTML = '';
 }
@@ -368,7 +1134,7 @@ function itemLine(it) {
 function renderMenu(ev) {
   const body = showOverlay(
     `菜单（${ev.page}/${ev.pages}）` + (ev.how === 'PICK_ANY' ? ' 可多选' :
-      ev.how === 'PICK_ONE' ? ' 选一项' : ''), null);
+      ev.how === 'PICK_ONE' ? ' 选一项' : ''), null, 'menu');
   for (const it of ev.items || []) {
     const b = document.createElement('button');
     b.type = 'button'; b.className = 'item' + (it.selected ? ' picked' : '');
@@ -385,7 +1151,7 @@ function renderMenu(ev) {
 function renderText(ev) {
   const lines = (ev.lines || []).map((l) =>
     typeof l === 'string' ? l : (l && l.text) || '');
-  const body = showOverlay(S.ripActive ? 'R.I.P.' : '文本', lines.join('\n'));
+  const body = showOverlay(S.ripActive ? 'R.I.P.' : '文本', lines.join('\n'), 'text');
   body.scrollTop = 0;
   overlayAction('继续（空格）', () => sendKey(' '), true);
 }
@@ -396,18 +1162,12 @@ function showLineBar(q) {
   $('line-q').textContent = q || '';
   const inp = $('line-input');
   inp.value = '';
-  /* focus summons the system keyboard on mobile -- only for
-     genuine line prompts, per spec.  Guarded by visibility: a
-     pre-queued answer can end the prompt before the timer fires,
-     and focusing the then-hidden input would swallow later keys */
   setTimeout(() => {
     if (!$('linebar').hidden) inp.focus({ preventScroll: true });
   }, 30);
 }
 function hideLineBar() {
   $('linebar').hidden = true;
-  /* drop focus, or later physical keys would be swallowed by the
-     hidden input instead of reaching the game */
   if (document.activeElement === $('line-input')) $('line-input').blur();
 }
 function submitLine() {
@@ -416,7 +1176,7 @@ function submitLine() {
   inp.value = '';
 }
 
-/* ---------------- contextual action bar ---------------- */
+/* ---------------- adaptive thumb control zone (mobile portrait + optional desktop) ---------------- */
 function actBtn(label, sub, fn, primary) {
   const b = document.createElement('button');
   b.type = 'button'; b.className = 'act' + (primary ? ' primary' : '');
@@ -429,19 +1189,15 @@ function actBtn(label, sub, fn, primary) {
   b.addEventListener('click', fn);
   return b;
 }
-function barRow(buttons) {
-  const row = document.createElement('div');
-  row.className = 'bar-row';
-  for (const b of buttons) row.appendChild(b);
-  return row;
-}
 function dirPad(selfLabel) {
   const pad = document.createElement('div');
   pad.id = 'dirpad';
   for (const d of DIRS) {
     const b = document.createElement('button');
-    b.type = 'button'; b.className = 'act';
-    b.textContent = d.dx === 0 && d.dy === 0 && selfLabel ? selfLabel : d.label;
+    b.type = 'button';
+    const isCenter = d.dx === 0 && d.dy === 0;
+    if (isCenter) b.className = 'center-dot';
+    b.textContent = isCenter ? (selfLabel || '休 .') : d.label;
     b.setAttribute('aria-label', '方向 ' + d.label);
     b.addEventListener('click', () => {
       const byte = dirByte(d.dx, d.dy);
@@ -452,7 +1208,6 @@ function dirPad(selfLabel) {
   return pad;
 }
 function adjacentCells() {
-  /* chars of the 8 neighbours of the hero on the latest map */
   const out = [];
   if (!S || !S.mapRows || !S.heroPos) return out;
   for (const d of DIRS) {
@@ -467,15 +1222,6 @@ const MONSTERISH = /[a-zA-Z&@';:]/;
 function contextualMainButtons() {
   const btns = [];
   const under = S.underHero;
-  btns.push(actBtn('拾取', ',', () => sendKey(',')));
-  if (under === '<') btns.push(actBtn('上楼', '<', () => sendKey('<'), true));
-  if (under === '>') btns.push(actBtn('下楼', '>', () => sendKey('>'), true));
-  if (under === '_') btns.push(actBtn('献祭', '#offer', () => sendBytes('#offer\n')));
-  if (under === '{') {
-    btns.push(actBtn('蘸取', '#dip', () => sendBytes('#dip\n')));
-    btns.push(actBtn('喝泉水', 'q', () => sendKey('q')));
-  }
-  if (under === '(') btns.push(actBtn('搜掠', '#loot', () => sendBytes('#loot\n')));
   const adj = adjacentCells();
   const door = adj.find((c) => c.ch === '+');
   if (door) {
@@ -483,6 +1229,15 @@ function contextualMainButtons() {
       sendBytes('o' + dirByte(door.dx, door.dy));
     }, true));
   }
+  if (under === '<') btns.push(actBtn('上楼', '<', () => sendKey('<'), true));
+  if (under === '>') btns.push(actBtn('下楼', '>', () => sendKey('>'), true));
+  if (under === '_') btns.push(actBtn('献祭', '#offer', () => sendBytes('#offer\n'), true));
+  if (under === '{') {
+    btns.push(actBtn('喝泉水', 'q', () => sendKey('q')));
+    btns.push(actBtn('蘸取', '#dip', () => sendBytes('#dip\n')));
+  }
+  if (under === '(') btns.push(actBtn('搜掠', '#loot', () => sendBytes('#loot\n')));
+  btns.push(actBtn('拾取', ',', () => sendKey(',')));
   const mon = adj.find((c) => MONSTERISH.test(c.ch) && c.ch !== '@');
   if (mon) {
     btns.push(actBtn('交谈', '#chat', () => {
@@ -490,104 +1245,137 @@ function contextualMainButtons() {
       sendBytes('#chat\n');
     }));
   }
+  /* Pad with core frequent actions up to 4 slots so muscle memory stays steady */
+  const hpLow = S.lastFrame && S.lastFrame.hpmax > 0 &&
+    (S.lastFrame.hp / S.lastFrame.hpmax) <= 0.55;
+  if (btns.length < 4) btns.push(actBtn('喝药', 'q', () => sendKey('q'), hpLow));
+  if (btns.length < 4) btns.push(actBtn('吃东西', 'e', () => sendKey('e')));
+  if (btns.length < 4 && !door) btns.push(actBtn('开门', 'o', () => sendKey('o')));
+  if (btns.length < 4) btns.push(actBtn('关门', 'c', () => sendKey('c')));
   return btns;
+}
+
+/* Pack arbitrary N context buttons cleanly into locked-height 1/2/3/4/6 grid */
+function buildContextZone(buttons) {
+  const zone = document.createElement('div');
+  let list = buttons.slice();
+  if (list.length > 6) {
+    const rest = list.length - 5;
+    list = list.slice(0, 5);
+    list.push(actBtn(`更多 +${rest}`, '命令面板', () => togglePanel(true)));
+  }
+  const n = list.length;
+  const cls = n <= 1 ? 'ctx-n1' : n === 2 ? 'ctx-n2' : n === 3 ? 'ctx-n3' :
+    n === 4 ? 'ctx-n4' : 'ctx-n6';
+  zone.className = 'ctx-zone ' + cls;
+  for (const b of list) zone.appendChild(b);
+  return zone;
+}
+
+function buildQuickStrip() {
+  const row = document.createElement('div');
+  row.className = 'thumb-quick';
+  const mk = (text, fn, cls) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = text;
+    if (cls) b.className = cls;
+    b.addEventListener('click', fn);
+    return b;
+  };
+  const logOpen = $('msglog-drawer') && !$('msglog-drawer').hidden;
+  row.append(
+    mk('背包 i', () => sendKey('i')),
+    mk('搜索 s', () => sendKey('s')),
+    mk(logOpen ? '日志 ▴' : '日志 ▾', () => toggleMsgLog(), 'log-toggle-btn' + (logOpen ? ' log-open' : '')),
+    mk('命令', () => togglePanel(true)),
+    mk('⇄', () => {
+      rightHandPad = !rightHandPad;
+      try { localStorage.setItem('airstring_hand_right', rightHandPad ? '1' : '0'); } catch (e) { }
+      renderBar();
+    }, 'flip-btn')
+  );
+  return row;
 }
 
 function renderBar() {
   const bar = $('actionbar');
+  if (!bar) return;
   bar.innerHTML = '';
   if (!S) return;
   const mode = uiMode();
-  const label = document.createElement('div');
-  label.className = 'bar-label';
-  bar.appendChild(label);
+
+  const mainRow = document.createElement('div');
+  mainRow.className = 'thumb-main' + (rightHandPad ? ' hand-right' : '');
+
+  let ctxBtns = [];
+  let padCenter = null;
+
   if (mode === 'over') {
-    label.textContent = '本局已结束';
-    bar.appendChild(barRow([actBtn('回开局页', '', () => showSetup(), true)]));
-    return;
-  }
-  if (mode === 'boot') { label.textContent = '游戏启动中…'; return; }
-  if (mode === 'line') {
-    label.textContent = '请输入文本（上方输入框），提交即送入原按键序列';
-    bar.appendChild(barRow([
-      actBtn('取消（Esc）', '', () => sendBytes([27])),
-    ]));
-    return;
-  }
-  if (mode === 'yn') {
+    const turns = S.lastFrame ? S.lastFrame.turn : 0;
+    ctxBtns = [actBtn('回开局页', '', () => showSetup(), true)];
+    if (turns >= 2) {
+      const ft = Math.max(1, turns - 1);
+      ctxBtns.push(actBtn('死前分叉', `第 ${ft} 回合`, () => forkSessionAt(S, ft)));
+    }
+  } else if (mode === 'boot') {
+    ctxBtns = [actBtn(S.buffering ? '缓冲恢复中…' : '游戏启动中…', '', () => { })];
+  } else if (mode === 'line') {
+    ctxBtns = [
+      actBtn('提交', 'Enter', () => submitLine(), true),
+      actBtn('取消', 'Esc', () => sendBytes([27])),
+    ];
+  } else if (mode === 'yn') {
     const p = S.prompt;
-    label.textContent = p.q || '请选择';
-    const btns = [];
     const choices = p.choices || 'ynq';
     const zh = { y: '是', n: '否', q: '取消', a: '全部' };
     for (const ch of choices) {
-      btns.push(actBtn((zh[ch] || ch) + '', ch, () => sendKey(ch),
-        p.def === ch));
+      ctxBtns.push(actBtn((zh[ch] || ch) + '', ch, () => sendKey(ch), p.def === ch));
     }
-    if (!choices.includes('\x1b'))
-      btns.push(actBtn('取消（Esc）', '', () => sendBytes([27])));
-    bar.appendChild(barRow(btns));
-    return;
-  }
-  if (mode === 'objprompt') {
+    if (!choices.includes('\x1b')) {
+      ctxBtns.push(actBtn('取消', 'Esc', () => sendBytes([27])));
+    }
+  } else if (mode === 'objprompt') {
     const p = S.prompt;
-    label.textContent = p.q || '选择物品';
-    const btns = [
+    ctxBtns = [
       actBtn('看列表', '?', () => sendKey('?'), true),
       actBtn('全部显示', '*', () => sendKey('*')),
     ];
     const m = /\[\s*(\S)\s+or\s+\?\*\]/.exec(p.q || '');
-    if (m) btns.push(actBtn('就它（' + m[1] + '）', m[1], () => sendKey(m[1])));
-    btns.push(actBtn('取消（Esc）', '', () => sendBytes([27])));
-    bar.appendChild(barRow(btns));
-    return;
+    if (m) ctxBtns.push(actBtn('就它（' + m[1] + '）', m[1], () => sendKey(m[1])));
+    ctxBtns.push(actBtn('取消', 'Esc', () => sendBytes([27])));
+  } else if (mode === 'menu') {
+    ctxBtns = [
+      actBtn('翻页', '空格', () => sendKey(' ')),
+      actBtn('关闭菜单', 'Esc', () => sendBytes([27])),
+    ];
+  } else if (mode === 'text' || mode === 'more' || mode === 'getret') {
+    ctxBtns = [actBtn('继续', '空格', () => sendKey(' '), true)];
+  } else if (mode === 'dir' || mode === 'dirprompt') {
+    padCenter = '自身 .';
+    ctxBtns = [
+      actBtn('选方向', '点左侧方向盘', () => { }),
+      actBtn('取消', 'Esc', () => { S.expectingDir = null; sendBytes([27]); }),
+    ];
+  } else {
+    ctxBtns = contextualMainButtons();
   }
-  if (mode === 'menu') {
-    label.textContent = '菜单已打开（上方列表可点选）';
-    return; /* overlay carries its own actions */
-  }
-  if (mode === 'text') {
-    label.textContent = '文本窗（读完点继续）';
-    bar.appendChild(barRow([actBtn('继续', '空格', () => sendKey(' '), true)]));
-    return;
-  }
-  if (mode === 'more' || mode === 'getret') {
-    label.textContent = mode === 'more' ? '还有更多消息' : '按继续';
-    bar.appendChild(barRow([actBtn('继续', '空格', () => sendKey(' '), true)]));
-    return;
-  }
-  if (mode === 'dir' || mode === 'dirprompt') {
-    label.textContent = '选择方向（Esc 取消）';
-    bar.appendChild(dirPad('自身'));
-    bar.appendChild(barRow([actBtn('取消（Esc）', '', () => {
-      S.expectingDir = null; sendBytes([27]);
-    })]));
-    return;
-  }
-  /* main command state */
-  label.textContent = '主命令';
-  bar.appendChild(barRow(contextualMainButtons()));
-  bar.appendChild(barRow([
-    actBtn('搜索', 's', () => sendKey('s')),
-    actBtn('背包', 'i', () => sendKey('i')),
-    actBtn('吃', 'e', () => sendKey('e')),
-    actBtn('喝', 'q', () => sendKey('q')),
-    actBtn('开门', 'o', () => sendKey('o')),
-    actBtn('关门', 'c', () => sendKey('c')),
-    actBtn('上楼', '<', () => sendKey('<')),
-    actBtn('下楼', '>', () => sendKey('>')),
-    actBtn('存档退出', 'S', () => sendKey('S')),
-    actBtn('全部命令', '面板', () => togglePanel(true)),
-  ]));
-  bar.appendChild(dirPad(null));
+
+  mainRow.append(dirPad(padCenter), buildContextZone(ctxBtns));
+  bar.append(mainRow, buildQuickStrip());
 }
 
 /* ---------------- command panel ---------------- */
 function togglePanel(open) {
   $('panel').hidden = !open;
-  if (open) { renderPanel(''); $('panel-search').focus(); }
-  else if (document.activeElement === $('panel-search'))
+  if (open) {
+    toggleGameDrawer(false);
+    toggleMsgLog(false);
+    renderPanel('');
+    $('panel-search').focus();
+  } else if (document.activeElement === $('panel-search')) {
     $('panel-search').blur();
+  }
 }
 function renderPanel(filter) {
   const list = $('panel-list');
@@ -625,10 +1413,15 @@ function renderPanel(filter) {
 
 /* ---------------- physical keyboard: full passthrough ---------------- */
 document.addEventListener('keydown', (e) => {
-  if (!S || S.over || $('game').hidden) return;
+  if (!S || S.over || S.buffering || S.tabLocked || $('game').hidden) return;
   const t = e.target;
   if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' ||
-            t.tagName === 'SELECT')) return; /* form fields keep keys */
+            t.tagName === 'SELECT')) return;
+  if (e.key === 'Escape') {
+    if ($('game-drawer') && !$('game-drawer').hidden) { toggleGameDrawer(false); return; }
+    if ($('panel') && !$('panel').hidden) { togglePanel(false); return; }
+    if ($('msglog-drawer') && !$('msglog-drawer').hidden) { toggleMsgLog(false); return; }
+  }
   let byte = null;
   if (e.ctrlKey && e.key.length === 1) {
     byte = e.key.toUpperCase().charCodeAt(0) & 0x1f;
@@ -654,9 +1447,9 @@ document.addEventListener('keydown', (e) => {
   sendBytes([byte]);
 });
 
-/* map taps: adjacent = move/attack, hero = wait, far = travel */
+/* map taps: adjacent = move/attack, hero = wait, far = travel (works in both full & zoomed view!) */
 $('grid').addEventListener('click', (e) => {
-  if (!S || S.over || !S.heroPos) return;
+  if (!S || S.over || S.buffering || S.tabLocked || !S.heroPos) return;
   const cell = e.target.closest('span[data-x]');
   if (!cell) return;
   const x = +cell.dataset.x, y = +cell.dataset.y;
@@ -669,8 +1462,6 @@ $('grid').addEventListener('click', (e) => {
     return;
   }
   if (mode === 'dir' || mode === 'dirprompt') return;
-  /* travel: '_' + cursor steps + '.' -- the tty getpos key
-     sequence, byte for byte */
   let seq = '_', cx = dx, cy = dy;
   while (cx !== 0 || cy !== 0) {
     const sx = Math.sign(cx), sy = Math.sign(cy);
@@ -707,8 +1498,25 @@ function handleFrame(text) {
     keys: bytesToB64(S.pendingKeys),
   });
   S.pendingKeys = [];
+
+  if (S.buffering) {
+    const idx = f.frame != null ? f.frame : (S.records.length - 2);
+    const exp = S.bufferExpectedHashes && S.bufferExpectedHashes[idx];
+    if (exp && f.hash && exp !== f.hash) {
+      S.bufferHashMismatch = true;
+    }
+    return;
+  }
+
   renderStatus();
-  maybeFlush();
+  if (!S.tabLocked && cloudActive()) {
+    saveLocalSnapshot();
+    S.dirtyCloud = true;
+    const curTurns = f.turn || 0;
+    if (curTurns - (S.lastCloudTurns || 0) >= 50) {
+      syncActiveToCloud(false);
+    }
+  }
 }
 function bytesToB64(bytes) {
   let s = '';
@@ -716,50 +1524,784 @@ function bytesToB64(bytes) {
   return btoa(s);
 }
 
-/* ---------------- recorder upload (chunked, to local stub) -------- */
-function pushRecord(rec) {
-  S.records.push(rec);
-  maybeFlush();
+/* ---------------- active persistence: IndexedDB (every turn) + Cloud single-file ---------------- */
+function hasMeaningfulProgress(sess) {
+  if (!sess) return false;
+  return sess.keysTotal >= 1 || (sess.lastFrame && sess.lastFrame.turn >= 2);
 }
-function maybeFlush() {
-  const pending = S.records.length - (S.flushedCount || 0);
-  if (pending >= 16) flushRecords(false);
+
+function buildActiveSnapshot(sess) {
+  const lf = sess.lastFrame || {};
+  return {
+    version: 1,
+    gameId: sess.id,
+    seed: sess.seed,
+    seedSource: sess.seedSource,
+    date: sess.date,
+    options: sess.options,
+    playerName: sess.playerName || 'fleck',
+    roleEn: sess.roleEn || 'valkyrie',
+    startedAt: sess.startedAt,
+    updatedAt: new Date().toISOString(),
+    sessionId: sess.sessionId,
+    parentGameId: sess.parentGameId || null,
+    forkTurn: sess.forkTurn != null ? sess.forkTurn : null,
+    turns: lf.turn || 0,
+    dlvl: lf.dlevel || 1,
+    hp: lf.hp != null ? lf.hp : null,
+    hpmax: lf.hpmax != null ? lf.hpmax : null,
+    thumb: buildClientAsciiThumb(sess.mapRows, sess.mapColors),
+    keysTotal: sess.keysTotal || 0,
+    records: sess.records.slice(),
+    pendingKeys: sess.pendingKeys.slice(),
+  };
 }
-function flushRecords(final) {
-  if (!S) return Promise.resolve();
-  const from = S.flushedCount || 0;
-  const batch = S.records.slice(from);
-  S.flushedCount = S.records.length;
-  if (!batch.length && !final) return Promise.resolve();
-  const payload = { gameId: S.id, seq: S.recSeq++, final: !!final, records: batch };
-  S.uploadChain = S.uploadChain.then(async () => {
-    try {
-      if (cloudActive()) {
-        /* S6: chunk object in Storage, named by seq (idempotent) */
-        await cloud.uploadChunk(payload);
-        S.cloudTransport = true;
-      } else {
-        const r = await fetch('./upload', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(payload),
+
+function scheduleLocalSave() {
+  if (localSaveTimer) clearTimeout(localSaveTimer);
+  localSaveTimer = setTimeout(() => {
+    localSaveTimer = null;
+    saveLocalSnapshot();
+  }, 250);
+}
+
+function saveLocalSnapshot() {
+  if (!S || S.over || S.buffering || S.tabLocked) return;
+  const user = cloud && cloud.currentUser();
+  if (!user || !hasMeaningfulProgress(S)) return;
+  const snap = buildActiveSnapshot(S);
+  idbPutGame(user.uid, snap);
+  try { sessionStorage.setItem('airstring_last_active_game', S.id); } catch (e) { }
+}
+
+function findCommonPrefixTurns(recordsA, recordsB) {
+  const turnsA = (recordsA || []).filter((r) => r && r.k === 'turn');
+  const turnsB = (recordsB || []).filter((r) => r && r.k === 'turn');
+  const n = Math.min(turnsA.length, turnsB.length);
+  let common = 0;
+  for (let i = 0; i < n; i++) {
+    if (turnsA[i].hash === turnsB[i].hash && turnsA[i].keys === turnsB[i].keys) {
+      common = turnsA[i].turn || (i + 1);
+    } else {
+      break;
+    }
+  }
+  return { common, lenA: turnsA.length, lenB: turnsB.length };
+}
+
+function updateSeedBanner() {
+  if (!S) return;
+  const forkNote = S.parentGameId
+    ? `\n分叉来源：${S.parentGameId}（第 ${S.forkTurn} 回合）` : '';
+  $('seed-banner').textContent = (S.seedSource === 'random'
+    ? `种子：随机（局终揭晓）`
+    : `种子：${S.seed}（${S.seedSource === 'fork' ? '分叉' : '指定'}）`) +
+    `\n日期固定 · 局 ID：${S.id}` + forkNote;
+}
+
+function updateDrawerSyncBanner() {
+  const box = $('drawer-auth-banner');
+  const btnFork = $('btn-fork-now');
+  const btnLeave = $('btn-newgame');
+  if (!box) return;
+  box.innerHTML = '';
+  const user = cloud && cloud.currentUser();
+  if (!user) {
+    box.className = 'drawer-sync-box is-guest';
+    const msg = document.createElement('div');
+    msg.textContent = '游客试玩中：刷新页面不会保存本局进度。现在登录 Google 即可自动认领并保存本局。';
+    box.appendChild(msg);
+    if (cloud && cloud.signIn) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = '登录 Google 并认领本局';
+      b.addEventListener('click', () => {
+        cloud.signIn().catch((e) => {
+          showToast('登录未完成：' + (e && e.message ? e.message : '请检查弹窗设置'));
         });
-        if (!r.ok) throw new Error('upload ' + r.status);
+      });
+      box.appendChild(b);
+    }
+    if (btnLeave) btnLeave.textContent = '返回开局页（游客局不保存）';
+  } else {
+    box.className = 'drawer-sync-box';
+    const statusText = S && S.cloudSyncStatus
+      ? S.cloudSyncStatus
+      : '已登录：每回合本地即时落盘，自动云端同步。';
+    const msg = document.createElement('div');
+    msg.textContent = statusText;
+    box.appendChild(msg);
+    if (btnLeave) btnLeave.textContent = '保存并返回开局页';
+  }
+  if (btnFork) {
+    const turns = S && S.lastFrame ? S.lastFrame.turn : 0;
+    btnFork.disabled = !S || S.over || S.buffering || turns < 1;
+    btnFork.textContent = turns >= 1
+      ? `从当前回合（第 ${turns} 回合）分叉新局`
+      : '从当前回合分叉新局';
+  }
+}
+
+function syncActiveToCloud(force) {
+  if (!S || S.over || S.buffering || S.tabLocked) return Promise.resolve();
+  const user = cloud && cloud.currentUser();
+  if (!user || !hasMeaningfulProgress(S)) return Promise.resolve();
+  if (!force && !S.dirtyCloud) return Promise.resolve();
+
+  const sess = S;
+  const uid = user.uid;
+  sess.dirtyCloud = false;
+
+  sess.syncChain = sess.syncChain.then(async () => {
+    if (!cloudActive() || cloud.currentUser().uid !== uid) return;
+    if (sess.over || sess.tabLocked) return;
+    let snap = buildActiveSnapshot(sess);
+    try {
+      /* Cross-device conflict check -> automatic in-place fork */
+      const remote = await cloud.loadActiveGame(sess.id);
+      if (remote && remote.sessionId && remote.sessionId !== sess.sessionId) {
+        const cmp = findCommonPrefixTurns(remote.records, snap.records);
+        const remoteBehindOrSame = cmp.lenA <= cmp.lenB && cmp.common === cmp.lenA;
+        if (!remoteBehindOrSame) {
+          const oldGameId = sess.id;
+          const newGameId = makeGameId(sess.seed);
+          const commonTurn = Math.max(0, cmp.common);
+          /* Keep remote copy locally under oldGameId so both timelines exist */
+          await idbPutGame(uid, remote);
+          /* Mutate current live session into forked timeline */
+          sess.id = newGameId;
+          sess.seedSource = 'fork';
+          sess.parentGameId = oldGameId;
+          sess.forkTurn = commonTurn;
+          if (sess.records[0] && sess.records[0].k === 'header') {
+            sess.records[0] = {
+              ...sess.records[0],
+              gameId: newGameId,
+              seedSource: 'fork',
+              parentGameId: oldGameId,
+              forkTurn: commonTurn,
+            };
+          }
+          snap = buildActiveSnapshot(sess);
+          await idbPutGame(uid, snap);
+          try { sessionStorage.setItem('airstring_last_active_game', newGameId); } catch (e) { }
+          broadcastTabClaim(newGameId);
+          updateSeedBanner();
+          showToast('检测到本局在另一设备推进，已自动将当前路线分叉保存为新局，两边进度均已保留！', 6000);
+        }
       }
-      S.uploadOk = (S.uploadOk || 0) + batch.length;
+      await cloud.saveActiveGame(snap);
+      sess.lastCloudTurns = snap.turns;
+      sess.lastCloudSyncAt = Date.now();
+      sess.uploadOk = (sess.uploadOk || 0) + 1;
+      sess.uploadFailed = false;
+      const tStr = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      sess.cloudSyncStatus = `已云端同步（第 ${snap.turns} 回合 · ${tStr}）`;
+      if ($('game-drawer') && !$('game-drawer').hidden) updateDrawerSyncBanner();
     } catch (e) {
-      /* backend unreachable: records stay in memory; the download
-         button below still yields the complete stream */
-      S.uploadFailed = true;
+      sess.uploadFailed = true;
+      sess.dirtyCloud = true;
+      sess.cloudSyncStatus = '离线/云端暂不可达（本地已即时保存，联网后自动补同步）';
+      if ($('game-drawer') && !$('game-drawer').hidden) updateDrawerSyncBanner();
     }
   });
-  return S.uploadChain;
+  return sess.syncChain;
 }
-setInterval(() => { if (S && !S.over) flushRecords(false); }, 8000);
+
+setInterval(() => {
+  if (S && !S.over && !S.buffering && !S.tabLocked && S.dirtyCloud) {
+    syncActiveToCloud(false);
+  }
+}, 30000);
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && S && !S.over && !S.buffering && !S.tabLocked) {
+    saveLocalSnapshot();
+    syncActiveToCloud(true);
+  } else if (document.visibilityState === 'visible' && !S) {
+    if ($('setup') && !$('setup').hidden) loadVerifiedLobby(false);
+    else if ($('mygames') && !$('mygames').hidden) refreshMyGamesPage(false);
+  }
+});
+window.addEventListener('pagehide', () => {
+  if (S && !S.over && !S.buffering && !S.tabLocked) {
+    saveLocalSnapshot();
+    syncActiveToCloud(true);
+  }
+});
+window.addEventListener('online', () => {
+  if (S && !S.over && !S.buffering && !S.tabLocked && cloudActive()) {
+    syncActiveToCloud(true);
+  }
+});
 
 function recordingText() {
   const lines = S.records.map((r) => JSON.stringify(r));
   return lines.join('\n') + '\n';
+}
+
+/* ---------------- video-style Buffer Fast-Forward engine ---------------- */
+function updateBufferUi() {
+  if (!S || !S.buffering) return;
+  const curTurn = S.lastFrame ? (S.lastFrame.turn || 0) : 0;
+  const targetTurns = Math.max(1, S.bufferTargetTurns || 1);
+  const byteRatio = S.bufferTotalBytes > 0 ? (S.bufferFedBytes / S.bufferTotalBytes) : 1;
+  const turnRatio = Math.min(1, curTurn / targetTurns);
+  const pct = Math.min(99, Math.max(1, Math.round(Math.max(byteRatio, turnRatio) * 100)));
+  const fill = $('buffer-bar-fill');
+  if (fill) fill.style.width = pct + '%';
+  const det = $('buffer-detail');
+  if (det) {
+    det.textContent = `正在缓冲：${curTurn} / ${S.bufferTargetTurns || '?'} 回合（${pct}%）`;
+  }
+}
+
+function pumpBuffer(sid) {
+  if (!S || S.sid !== sid || !S.buffering) return;
+  const replayBytes = S.bufferReplayBytes;
+  if (!replayBytes || !replayBytes.length) {
+    finishBuffering(sid);
+    return;
+  }
+  let offset = 0;
+  const CHUNK = 48;
+
+  function step() {
+    if (!S || S.sid !== sid || !S.buffering) return;
+    if (S.over) {
+      finishBuffering(sid);
+      return;
+    }
+    const q = globalThis.__airstring_key_queue;
+    if (q && q.pos < q.bytes.length) {
+      updateBufferUi();
+      setTimeout(step, 4);
+      return;
+    }
+    if (offset < replayBytes.length) {
+      const end = Math.min(offset + CHUNK, replayBytes.length);
+      const slice = replayBytes.subarray(offset, end);
+      offset = end;
+      S.bufferFedBytes = offset;
+      globalThis.__airstring_push_keys(slice);
+      updateBufferUi();
+      setTimeout(step, 0);
+      return;
+    }
+    /* All bytes pushed and consumed by WASM; brief settle for final frame/map events */
+    setTimeout(() => {
+      if (!S || S.sid !== sid || !S.buffering) return;
+      const q2 = globalThis.__airstring_key_queue;
+      if (q2 && q2.pos < q2.bytes.length) {
+        setTimeout(step, 4);
+        return;
+      }
+      finishBuffering(sid);
+    }, 35);
+  }
+  step();
+}
+
+function finishBuffering(sid) {
+  if (!S || S.sid !== sid) return;
+  S.buffering = false;
+  S.bufferReplayBytes = null;
+  const fill = $('buffer-bar-fill');
+  if (fill) fill.style.width = '100%';
+  const ov = $('buffer-overlay');
+  if (ov) ov.hidden = true;
+
+  /* Hydrate msglog once from buffered messages */
+  const log = $('msglog');
+  if (log) {
+    log.innerHTML = '';
+    for (const line of S.logBuffer) {
+      const div = document.createElement('div');
+      div.textContent = line;
+      log.appendChild(div);
+    }
+  }
+  S.logBuffer = [];
+
+  renderMessages();
+  renderGrid();
+  renderStatus();
+  updateZoomButton();
+  renderBar();
+
+  /* Restore any active prompt/menu/text overlay */
+  if (S.prompt && S.prompt.kind === 'line') {
+    showLineBar(S.prompt.q);
+  } else if (S.menu) {
+    renderMenu(S.menu);
+  } else if (S.textActive && S.lastTextEv) {
+    renderText(S.lastTextEv);
+  } else if (S.ripActive) {
+    showOverlay('R.I.P.', null, 'rip');
+  }
+
+  updateDrawerSyncBanner();
+
+  if (S.bufferHashMismatch) {
+    showToast('缓冲恢复完成（检测到部分帧校验不一致，请确认构建版本）', 5000);
+  } else if (S.bufferMode === 'fork') {
+    showToast(`分叉完成：已从第 ${S.forkTurn} 回合开启新时间线`, 3500);
+    if (cloudActive()) {
+      saveLocalSnapshot();
+      syncActiveToCloud(true);
+    }
+  }
+}
+
+/* ---------------- setup active games list, My Games page & auth sync ---------------- */
+function setTopNavActive(which) {
+  if ($('nav-lobby')) $('nav-lobby').classList.toggle('active', which === 'setup');
+  if ($('nav-mygames')) $('nav-mygames').classList.toggle('active', which === 'mygames');
+}
+
+function updateMyCountBadge(count) {
+  const b = $('nav-my-count');
+  if (!b) return;
+  if (count > 0) {
+    b.textContent = String(count);
+    b.hidden = false;
+  } else {
+    b.hidden = true;
+  }
+}
+
+function renderActiveGameCard(item, uid, fromPage = 'mygames') {
+  const roleZh = (ROLES[item.roleEn] && ROLES[item.roleEn].zh) || item.roleEn || '冒险者';
+  const when = formatRelativeTime(item.updatedAt);
+
+  const card = document.createElement('article');
+  card.className = 'vgame-card clickable';
+  card.title = '点击继续游玩';
+  card.addEventListener('click', () => resumeActiveGameById(uid, item.gameId, false));
+
+  /* Pure-black 35x11 ASCII thumbnail (consistent with finished cards) */
+  const thumbWrap = document.createElement('div');
+  thumbWrap.className = 'vgame-thumb-wrap';
+  const pre = item.thumb ? renderAsciiThumb(item.thumb) : null;
+  if (pre) {
+    thumbWrap.appendChild(pre);
+  } else {
+    const ph = document.createElement('div');
+    ph.className = 'ascii-thumb-placeholder';
+    ph.textContent = `@  #${item.seedSource === 'random' ? '随机' : item.seed}\n${item.playerName || 'fleck'} · ${roleZh}\n点击继续冒险`;
+    thumbWrap.appendChild(ph);
+  }
+
+  const tl = document.createElement('span');
+  tl.className = 'thumb-pill-tl';
+  tl.textContent = item.parentGameId ? '⚡ 进行中分叉' : '▶ 进行中';
+  thumbWrap.appendChild(tl);
+
+  if (item.hp != null && item.hpmax != null) {
+    const tr = document.createElement('span');
+    tr.className = 'thumb-pill-tr';
+    tr.textContent = `HP ${item.hp}/${item.hpmax}`;
+    thumbWrap.appendChild(tr);
+  }
+
+  const br = document.createElement('span');
+  br.className = 'thumb-pill-br';
+  br.textContent = `Dlvl:${item.dlvl || 1} · T:${item.turns || 0}`;
+  thumbWrap.appendChild(br);
+
+  const body = document.createElement('div');
+  body.className = 'vgame-body';
+
+  const top = document.createElement('div');
+  top.className = 'vgame-top';
+  const title = document.createElement('span');
+  title.textContent = `${roleZh} · ${item.playerName || 'fleck'}`;
+  top.appendChild(title);
+  if (item.parentGameId) {
+    const fb = document.createElement('span');
+    fb.className = 'ag-badge fork';
+    fb.textContent = `⚡ T${item.forkTurn ?? 0}`;
+    top.appendChild(fb);
+  }
+  const seedTag = document.createElement('span');
+  seedTag.className = 'vgame-seed-tag';
+  seedTag.textContent = item.seedSource === 'random' ? '#随机' : `#${item.seed}`;
+  top.appendChild(seedTag);
+
+  const subRow = document.createElement('div');
+  subRow.className = 'vgame-subrow';
+  const hint = document.createElement('span');
+  hint.className = 'vgame-reason';
+  hint.textContent = '点击卡片继续游玩';
+  const wh = document.createElement('span');
+  wh.className = 'vgame-when';
+  wh.textContent = when;
+  subRow.append(hint, wh);
+
+  const acts = document.createElement('div');
+  acts.className = 'card-corner-actions';
+
+  const bWatch = document.createElement('button');
+  bWatch.type = 'button';
+  bWatch.className = 'card-link-act';
+  bWatch.textContent = '▶ 回放';
+  bWatch.addEventListener('click', (e) => {
+    e.stopPropagation();
+    watchActiveGameById(uid, item.gameId, fromPage);
+  });
+
+  const bDel = document.createElement('button');
+  bDel.type = 'button';
+  bDel.className = 'card-link-act danger';
+  bDel.textContent = '删除';
+  bDel.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (!confirm(`确定删除进行中对局「${roleZh} · ${item.playerName || 'fleck'}（第 ${item.turns || 0} 回合）」？`)) return;
+    await idbDeleteGame(uid, item.gameId);
+    try { await cloud.deleteActiveGame(item.gameId); } catch (err) { }
+    await refreshActiveGames(true);
+    if ($('mygames') && !$('mygames').hidden) refreshMyGamesPage(true);
+  });
+
+  acts.append(bWatch, bDel);
+  body.append(top, subRow, acts);
+  card.append(thumbWrap, body);
+  return card;
+}
+
+let cachedActiveAll = [];
+let lastMyGamesFetchAt = 0;
+let pendingPollTimers = [];
+
+function clearPendingPolls() {
+  for (const t of pendingPollTimers) clearTimeout(t);
+  pendingPollTimers = [];
+}
+
+function schedulePendingPoll(games) {
+  clearPendingPolls();
+  const now = Date.now();
+  const hasFreshPending = (games || []).some((g) => {
+    if (g.status !== 'pending' || g.hiddenByOwner) return false;
+    const ts = g.createdAt ? Date.parse(g.createdAt) : 0;
+    return ts > 0 && (now - ts) < 90000;
+  });
+  if (!hasFreshPending) return;
+  for (const delayMs of [3000, 8000, 18000]) {
+    pendingPollTimers.push(setTimeout(() => {
+      if ($('mygames') && !$('mygames').hidden) {
+        refreshMyGamesPage(true);
+      } else if ($('setup') && !$('setup').hidden) {
+        loadVerifiedLobby(true);
+      }
+    }, delayMs));
+  }
+}
+
+async function fetchMergedActiveGames(uid, forceCloud) {
+  const merged = new Map();
+  const localList = await idbListGames(uid);
+  for (const g of localList) {
+    if (g && g.gameId) merged.set(g.gameId, { ...g, _source: 'local' });
+  }
+  let cloudErr = false;
+  try {
+    const idx = await cloud.loadActiveIndex(forceCloud);
+    for (const [gid, meta] of Object.entries((idx && idx.games) || {})) {
+      if (!meta || !meta.gameId) continue;
+      const cur = merged.get(gid);
+      if (!cur || (meta.turns || 0) > (cur.turns || 0) ||
+          ((meta.turns || 0) === (cur.turns || 0) && String(meta.updatedAt || '') > String(cur.updatedAt || ''))) {
+        merged.set(gid, { ...meta, _source: 'cloud' });
+      } else if (cur && !cur.thumb && meta.thumb) {
+        cur.thumb = meta.thumb;
+      }
+    }
+  } catch (e) {
+    cloudErr = true;
+  }
+  const all = Array.from(merged.values()).sort((a, b) =>
+    String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+  cachedActiveAll = all;
+  return { all, cloudErr };
+}
+
+function renderActiveListInto(all, uid, listEl, shelvedWrap, shelvedList, shelvedSum, fromPage) {
+  if (!listEl) return;
+  listEl.innerHTML = '';
+  if (shelvedList) shelvedList.innerHTML = '';
+  const now = Date.now();
+  const recent = [];
+  const shelved = [];
+  for (const item of all) {
+    const ts = item.updatedAt ? Date.parse(item.updatedAt) : now;
+    if (now - ts > SHELVE_AGE_MS) shelved.push(item);
+    else recent.push(item);
+  }
+  if (!recent.length) {
+    listEl.innerHTML = '<div class="hint">' +
+      (shelved.length ? '近期无进行中对局，下方可展开 30 天前已搁置的对局。' : '暂无进行中对局，点右上角「+ 开新局」试试！') +
+      '</div>';
+  } else {
+    for (const item of recent) listEl.appendChild(renderActiveGameCard(item, uid, fromPage));
+  }
+  if (shelvedWrap && shelvedList && shelvedSum) {
+    shelvedWrap.hidden = shelved.length === 0;
+    shelvedSum.textContent = `已搁置对局（${shelved.length} 局 · 超过 30 天未操作，随时可续打或回放）`;
+    for (const item of shelved) shelvedList.appendChild(renderActiveGameCard(item, uid, fromPage));
+  }
+}
+
+async function refreshActiveGames(forceCloud = false) {
+  const guestBanner = $('guest-banner');
+  const user = cloud && cloud.currentUser();
+  if (!user) {
+    cachedActiveAll = [];
+    updateMyCountBadge(0);
+    if (guestBanner) guestBanner.hidden = false;
+    return [];
+  }
+  if (guestBanner) guestBanner.hidden = true;
+  const { all } = await fetchMergedActiveGames(user.uid, forceCloud);
+  updateMyCountBadge(all.length);
+  return all;
+}
+
+async function refreshMyGamesPage(forceCloud = false) {
+  const guestBox = $('mygames-guest');
+  const contentBox = $('mygames-content');
+  const user = cloud && cloud.currentUser();
+  if (!user) {
+    if (guestBox) guestBox.hidden = false;
+    if (contentBox) contentBox.hidden = true;
+    return;
+  }
+  if (guestBox) guestBox.hidden = true;
+  if (contentBox) contentBox.hidden = false;
+
+  const uid = user.uid;
+  const needCloud = forceCloud || (Date.now() - lastMyGamesFetchAt >= 30000);
+  const allActive = await refreshActiveGames(needCloud);
+  if ($('my-active-count')) $('my-active-count').textContent = `共 ${allActive.length} 局`;
+  renderActiveListInto(
+    allActive, uid,
+    $('my-active-list'), $('my-shelved-wrap'),
+    $('my-shelved-list'), $('my-shelved-summary'), 'mygames',
+  );
+
+  const finBox = $('my-finished-list');
+  const finCount = $('my-finished-count');
+  if (!needCloud && finBox && finBox.children.length > 0 && !finBox.querySelector('.hint')) {
+    return;
+  }
+  if (finBox && !finBox.children.length) {
+    finBox.innerHTML = '<div class="hint">加载我的已结束对局…</div>';
+  }
+  try {
+    const raw = await cloud.listMyGames(50);
+    lastMyGamesFetchAt = Date.now();
+    const games = raw.map(normalizePlainGame).filter((g) => !g.hiddenByOwner);
+    schedulePendingPoll(games);
+    if (finCount) finCount.textContent = `共 ${games.length} 局`;
+    if (!games.length) {
+      if (finBox) finBox.innerHTML = '<div class="hint">暂无已结束对局。完成一局（通关/死亡/#quit）后会自动出现在这里。</div>';
+      return;
+    }
+    if (finBox) {
+      finBox.innerHTML = '';
+      for (const g of games) finBox.appendChild(buildGalleryCard(g, 'mygames'));
+    }
+  } catch (e) {
+    if (finBox) finBox.innerHTML = '<div class="hint">暂时无法拉取已结束对局：' + (e && e.message ? e.message : e) + '</div>';
+  }
+}
+
+async function showMyGames(forceCloud = true) {
+  if (S && !S.over && !S.buffering && !S.tabLocked && cloudActive()) {
+    saveLocalSnapshot();
+    await Promise.race([syncActiveToCloud(true), new Promise((r) => setTimeout(r, 2000))]);
+  }
+  try { sessionStorage.removeItem('airstring_last_active_game'); } catch (e) { }
+  stopReplayPlayback();
+  R = null;
+  teardownCurrentSession();
+  S = null;
+  if (document.fullscreenElement && document.exitFullscreen) {
+    document.exitFullscreen().catch(() => { });
+  }
+  document.body.classList.remove('in-game');
+  toggleGameDrawer(false);
+  toggleMsgLog(false);
+  $('buffer-overlay').hidden = true;
+  $('tab-lock-overlay').hidden = true;
+  $('game').hidden = true;
+  $('setup').hidden = true;
+  if ($('replay')) $('replay').hidden = true;
+  if ($('mygames')) $('mygames').hidden = false;
+  setTopNavActive('mygames');
+  try { history.replaceState(null, '', '#mygames'); } catch (e) { }
+  await refreshMyGamesPage(forceCloud);
+}
+
+async function watchActiveGameById(uid, gameId, fromPage = 'mygames') {
+  const snap = await loadBestSnapshot(uid, gameId);
+  if (!snap) {
+    alert('未找到该对局记录，可能已被清理。');
+    refreshMyGamesPage(true);
+    return;
+  }
+  const opts = parseOptionMap(snap.options || '');
+  const gameDoc = {
+    gameId: snap.gameId,
+    uid,
+    status: 'playing',
+    seed: String(snap.seed ?? '?'),
+    seedSource: snap.seedSource || 'given',
+    options: snap.options || '',
+    name: snap.playerName || opts.name || 'fleck',
+    roleKey: snap.roleEn || opts.role || 'valkyrie',
+    turns: snap.turns || 0,
+    frames: snap.turns || 0,
+    framesCompared: snap.turns || 0,
+    framesMatched: snap.turns || 0,
+    createdAt: snap.startedAt || '',
+    recordingSha256: '',
+    publicRecordingPath: null,
+    maxDlvl: snap.dlvl || 1,
+    outcome: null,
+    deathReason: '进行中对局',
+    parentGameId: snap.parentGameId || null,
+    forkTurn: snap.forkTurn != null ? snap.forkTurn : null,
+  };
+  openReplay(gameDoc, { snapshot: snap, fromPage });
+}
+
+async function loadBestSnapshot(uid, gameId) {
+  const local = await idbGetGame(uid, gameId);
+  let remote = null;
+  try {
+    if (cloudActive()) remote = await cloud.loadActiveGame(gameId);
+  } catch (e) { }
+  if (!local && !remote) return null;
+  if (local && !remote) return local;
+  if (!local && remote) return remote;
+  const lt = local.turns || 0;
+  const rt = remote.turns || 0;
+  if (rt > lt) return remote;
+  if (lt > rt) return local;
+  return String(remote.updatedAt || '') > String(local.updatedAt || '') ? remote : local;
+}
+
+async function resumeActiveGameById(uid, gameId, asFork) {
+  const snap = await loadBestSnapshot(uid, gameId);
+  if (!snap) {
+    alert('未找到该对局记录，可能已被清理。');
+    refreshActiveGames(true);
+    return;
+  }
+  const turns = (snap.records || []).filter((r) => r && r.k === 'turn');
+  const expectedHashes = turns.map((t) => t.hash);
+  const replayBytes = asFork
+    ? concatReplayBytes(turns, null)
+    : concatReplayBytes(snap.records, snap.pendingKeys);
+  const expectedTurns = turns.length ? (turns[turns.length - 1].turn || turns.length) : 0;
+
+  if (asFork) {
+    await startGame({
+      mode: 'fork',
+      seed: snap.seed,
+      seedSource: 'fork',
+      options: snap.options,
+      parentGameId: snap.gameId,
+      forkTurn: expectedTurns,
+      replayBytes,
+      expectedTurns,
+      expectedHashes,
+    });
+  } else {
+    await startGame({
+      mode: 'resume',
+      gameId: snap.gameId,
+      seed: snap.seed,
+      seedSource: snap.seedSource || 'given',
+      options: snap.options,
+      startedAt: snap.startedAt,
+      parentGameId: snap.parentGameId || null,
+      forkTurn: snap.forkTurn != null ? snap.forkTurn : null,
+      baseCloudTurns: snap.turns || 0,
+      replayBytes,
+      expectedTurns,
+      expectedHashes,
+    });
+  }
+}
+
+async function forkSessionAt(sess, targetTurn) {
+  if (!sess) return;
+  /* Persist the parent active game BEFORE tearing it down to launch the fork! */
+  if (!sess.over && !sess.buffering && !sess.tabLocked && cloudActive() && hasMeaningfulProgress(sess)) {
+    saveLocalSnapshot();
+    await Promise.race([syncActiveToCloud(true), new Promise((r) => setTimeout(r, 2500))]);
+  }
+  const allTurns = (sess.records || []).filter((r) => r && r.k === 'turn');
+  const sliced = targetTurn != null
+    ? allTurns.filter((t) => (t.turn || 0) <= targetTurn)
+    : allTurns;
+  const forkTurn = sliced.length ? (sliced[sliced.length - 1].turn || sliced.length) : 0;
+  const replayBytes = concatReplayBytes(sliced, null);
+  const expectedHashes = sliced.map((t) => t.hash);
+  await startGame({
+    mode: 'fork',
+    seed: sess.seed,
+    seedSource: 'fork',
+    options: sess.options,
+    parentGameId: sess.id,
+    forkTurn,
+    replayBytes,
+    expectedTurns: forkTurn,
+    expectedHashes,
+  });
+}
+
+async function onAuthChanged(user) {
+  await refreshActiveGames(true);
+  if (verifiedGamesCache.length) renderVerifiedGallery();
+  if ($('mygames') && !$('mygames').hidden) {
+    await refreshMyGamesPage(true);
+  }
+  if (R) {
+    updateReplayCommentAuthUi();
+    renderReplayComments();
+  }
+  /* Update drawer if currently in game */
+  if (S) {
+    updateDrawerSyncBanner();
+    if (user && !S.over && !S.buffering && !S.tabLocked) {
+      if (hasMeaningfulProgress(S)) {
+        saveLocalSnapshot();
+        S.dirtyCloud = true;
+        syncActiveToCloud(true);
+        showToast('已登录！当前试玩进度已自动认领并保存至你的账号。', 4500);
+      } else {
+        showToast('已登录，开始行动后将自动保存进度。', 3000);
+      }
+    }
+    return;
+  }
+  /* Auto-resume exact game on browser F5 refresh for signed-in user */
+  if (user && !autoResumeAttempted && !location.hash.startsWith('#replay/') && location.hash !== '#mygames') {
+    autoResumeAttempted = true;
+    let lastId = null;
+    try { lastId = sessionStorage.getItem('airstring_last_active_game'); } catch (e) { }
+    if (lastId) {
+      const snap = await loadBestSnapshot(user.uid, lastId);
+      if (snap && ((snap.turns || 0) >= 1 || (snap.keysTotal || 0) >= 1)) {
+        resumeActiveGameById(user.uid, lastId, false);
+      } else {
+        try { sessionStorage.removeItem('airstring_last_active_game'); } catch (e) { }
+      }
+    }
+  }
 }
 
 /* ---------------- game lifecycle ---------------- */
@@ -768,187 +2310,270 @@ function randomSeed64() {
   crypto.getRandomValues(a);
   return ((BigInt(a[0]) << 32n) | BigInt(a[1])).toString(10);
 }
-
-async function startGame() {
-  const name = $('opt-name').value.trim() || 'fleck';
-  const role = $('opt-role').value;
-  const race = $('opt-race').value;
-  const gender = $('opt-gender').value;
-  const align = $('opt-align').value;
-  const seedMode = document.querySelector('input[name="seedmode"]:checked').value;
-  let seed, seedSource;
-  if (seedMode === 'given') {
-    seed = $('seed-input').value.trim();
-    if (!/^\d+$/.test(seed) || BigInt(seed) >= (1n << 64n)) {
-      alert('种子须为 0 – 2^64-1 的整数');
-      return;
-    }
-    seedSource = 'given';
-  } else {
-    seed = randomSeed64();
-    seedSource = 'random';
-  }
-  const options =
-    `name:${name},role:${role},race:${race},gender:${gender},align:${align}`;
-  const gameId = 'g-' + seed + '-' +
+function makeGameId(seed) {
+  return 'g-' + seed + '-' +
     new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14) + '-' +
     Math.floor(Math.random() * 0xffff).toString(16).padStart(4, '0');
+}
 
-  S = newSession({ gameId, seed, seedSource, options });
-  S.playerName = name; S.roleEn = role;
-  S.records.push({
-    k: 'header', gameId, seed, seedSource, date: FIXED_DATE, options,
-    startedAt: new Date().toISOString(), ua: navigator.userAgent,
-    restored: pendingImport ? pendingImport.name : null,
+function teardownCurrentSession() {
+  activeSessionToken++;
+  if (localSaveTimer) { clearTimeout(localSaveTimer); localSaveTimer = null; }
+  if (typeof globalThis.__airstring_close_keys === 'function') {
+    try { globalThis.__airstring_close_keys(); } catch (e) { }
+  }
+}
+
+async function startGame(plan) {
+  let name, role, race, gender, align, seed, seedSource, options, gameId;
+  let startedAt = new Date().toISOString();
+  let parentGameId = null, forkTurn = null, baseCloudTurns = 0;
+
+  if (plan) {
+    options = plan.options;
+    const optMap = parseOptionMap(options);
+    name = optMap.name || 'fleck';
+    role = optMap.role || 'valkyrie';
+    seed = String(plan.seed);
+    seedSource = plan.seedSource || 'given';
+    gameId = plan.mode === 'resume' && plan.gameId ? plan.gameId : makeGameId(seed);
+    startedAt = plan.startedAt || startedAt;
+    parentGameId = plan.parentGameId || null;
+    forkTurn = plan.forkTurn != null ? plan.forkTurn : null;
+    baseCloudTurns = plan.baseCloudTurns || 0;
+  } else {
+    /* Soft cap check for fresh games when signed in */
+    const user = cloud && cloud.currentUser();
+    if (user) {
+      try {
+        const localGames = await idbListGames(user.uid);
+        if (localGames.length >= MAX_ACTIVE_SOFT_CAP) {
+          alert(`当前已有 ${localGames.length} 局进行中对局，请先放弃部分旧对局再开新局。`);
+          return;
+        }
+      } catch (e) { }
+    }
+    name = $('opt-name').value.trim() || 'fleck';
+    role = $('opt-role').value;
+    race = $('opt-race').value;
+    gender = $('opt-gender').value;
+    align = $('opt-align').value;
+    const seedMode = document.querySelector('input[name="seedmode"]:checked').value;
+    if (seedMode === 'given') {
+      seed = $('seed-input').value.trim();
+      if (!/^\d+$/.test(seed) || BigInt(seed) >= (1n << 64n)) {
+        alert('种子须为 0 – 2^64-1 的整数');
+        return;
+      }
+      seedSource = 'given';
+    } else {
+      seed = randomSeed64();
+      seedSource = 'random';
+    }
+    options = `name:${name},role:${role},race:${race},gender:${gender},align:${align}`;
+    gameId = makeGameId(seed);
+  }
+
+  teardownCurrentSession();
+  const sid = activeSessionToken;
+  const hasBuffer = !!(plan && plan.replayBytes && plan.replayBytes.length > 0);
+
+  S = newSession({
+    sid, gameId, seed, seedSource, options, startedAt,
+    parentGameId, forkTurn, baseCloudTurns,
+    buffering: hasBuffer,
+    bufferMode: plan ? plan.mode : null,
+    bufferTargetTurns: plan ? (plan.expectedTurns || 0) : 0,
+    bufferTotalBytes: hasBuffer ? plan.replayBytes.length : 0,
+    bufferExpectedHashes: plan ? (plan.expectedHashes || []) : [],
+    bufferReplayBytes: hasBuffer ? plan.replayBytes : null,
   });
+  S.playerName = name; S.roleEn = role;
 
+  const headerRec = {
+    k: 'header', gameId, seed, seedSource, date: FIXED_DATE, options,
+    startedAt, ua: navigator.userAgent, restored: null,
+  };
+  if (parentGameId) {
+    headerRec.parentGameId = parentGameId;
+    headerRec.forkTurn = forkTurn != null ? forkTurn : 0;
+  }
+  S.records.push(headerRec);
+
+  broadcastTabClaim(gameId);
+  if (cloudActive()) {
+    try { sessionStorage.setItem('airstring_last_active_game', gameId); } catch (e) { }
+  }
+
+  stopReplayPlayback();
+  R = null;
+  if ($('replay')) $('replay').hidden = true;
+  if ($('mygames')) $('mygames').hidden = true;
+  if (location.hash === '#mygames' || location.hash.startsWith('#replay/')) {
+    try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { }
+  }
+  document.body.classList.add('in-game');
   $('setup').hidden = true;
   $('game').hidden = false;
   $('gameover').hidden = true;
+  $('tab-lock-overlay').hidden = true;
   $('grid').innerHTML = '';
+  lastGridDims = '';
   $('msglog').innerHTML = '';
-  $('msg').textContent = '';
-  $('saves-box').innerHTML = '';
   hideOverlay(); hideLineBar(); togglePanel(false);
-  $('seed-banner').textContent = seedSource === 'given'
-    ? `种子：${seed}（指定） · 日期固定 · 本局 id：${gameId}`
-    : `种子：随机（局终揭晓） · 日期固定 · 本局 id：${gameId}`;
+  toggleMsgLog(false); toggleGameDrawer(false);
+  updateSeedBanner();
+  updateDrawerSyncBanner();
+
+  const bufOv = $('buffer-overlay');
+  if (bufOv) {
+    bufOv.hidden = !hasBuffer;
+    if (hasBuffer) {
+      $('buffer-title').textContent = plan.mode === 'fork'
+        ? `正在分叉至第 ${forkTurn} 回合…` : '正在缓冲恢复对局…';
+      $('buffer-bar-fill').style.width = '2%';
+      $('buffer-detail').textContent = `准备引擎（目标 ${plan.expectedTurns || '?'} 回合）…`;
+    }
+  }
+
+  renderMessages();
+  renderStatus();
+  updateZoomButton();
   renderBar();
 
-  /* host-side contract wiring; pre-s3.js installs the queue API
-     and default collectors only for callbacks we do not predefine */
   globalThis.__airstring_config = {
     seed, date: FIXED_DATE, options, mode: 'async',
     exportPath: '/fleck.frames', rngPath: '/fleck.rng',
   };
   globalThis.__airstring_key_queue = { bytes: [], pos: 0, closed: false };
-  globalThis.__airstring_event = (json) => handleEvent(json);
-  globalThis.__airstring_frame = (text) => handleFrame(text);
-  globalThis.__airstring_rngline = () => { if (S) S.rngLines++; };
-  globalThis.__airstring_game_over = (status) => handleGameOver(status);
+  globalThis.__airstring_event = (json) => { if (S && S.sid === sid) handleEvent(json); };
+  globalThis.__airstring_frame = (text) => { if (S && S.sid === sid) handleFrame(text); };
+  globalThis.__airstring_rngline = () => { if (S && S.sid === sid) S.rngLines++; };
+  globalThis.__airstring_game_over = (status) => { if (S && S.sid === sid) handleGameOver(status); };
 
   const modArg = {
-    print: (s) => appendLog('[out] ' + s),
-    printErr: (s) => appendLog('[err] ' + s),
+    print: (s) => { if (S && S.sid === sid && !S.buffering) appendLog('[out] ' + s); },
+    printErr: (s) => { if (S && S.sid === sid && !S.buffering) appendLog('[err] ' + s); },
   };
-  if (pendingImport) {
-    const imp = pendingImport;
-    /* our preRun runs before pre-s3's (it is earlier in the
-       array), i.e. before the MEMFS skeleton exists -- create
-       /save ourselves */
-    modArg.preRun = [function () {
-      try { modArg.FS.mkdir('/save'); } catch (e) { /* exists */ }
-      try {
-        modArg.FS.writeFile('/save/' + imp.name, imp.bytes);
-        appendLog('已写入导入存档 /save/' + imp.name +
-          '（' + imp.bytes.length + ' B）');
-      } catch (e) {
-        appendLog('导入存档写入失败：' + (e.errno || '') + ' ' +
-          (e.message || String(e)));
-      }
-    }];
-  }
   try {
     const { default: createModule } = await import('./nethack.js');
-    S.module = await createModule(modArg);
+    const mod = await createModule(modArg);
+    if (S && S.sid === sid) S.module = mod;
   } catch (e) {
-    appendLog('模块启动异常：' + (e && e.message ? e.message : e));
+    if (S && S.sid === sid) {
+      if (S.buffering) finishBuffering(sid);
+      appendLog('模块启动异常：' + (e && e.message ? e.message : e));
+    }
   }
 }
 
 function handleGameOver(status) {
   if (!S || S.over) return;
+  if (S.buffering) finishBuffering(S.sid);
   S.over = true; S.overStatus = status;
+  try { sessionStorage.removeItem('airstring_last_active_game'); } catch (e) { }
+
   if (S.pendingKeys.length) {
     S.records.push({ k: 'tail', keys: bytesToB64(S.pendingKeys) });
     S.pendingKeys = [];
   }
-  S.records.push({
-    k: 'end', status, turns: S.lastFrame ? S.lastFrame.turn : 0,
-    frames: S.lastFrame ? S.lastFrame.frame + 1 : 0, keysTotal: S.keysTotal,
-  });
-  flushRecords(true);
+  const turns = S.lastFrame ? S.lastFrame.turn : 0;
+  const frames = S.lastFrame ? S.lastFrame.frame + 1 : 0;
+  S.records.push({ k: 'end', status, turns, frames, keysTotal: S.keysTotal });
+
   const useCloud = cloudActive();
+  const user = cloud && cloud.currentUser();
+  if (user) {
+    idbDeleteGame(user.uid, S.id);
+  }
   if (useCloud) {
-    /* S6: once every chunk has landed, store the canonical
-       recording in Storage and index the game in Firestore with
-       status 'pending' -- the verdict itself is written later by
-       the verification worker, never by the client. */
     const endRec = S.records[S.records.length - 1];
-    const header = S.records[0];
-    S.uploadChain = S.uploadChain.then(async () => {
+    const sess = S;
+    sess.syncChain = sess.syncChain.then(async () => {
       try {
         await cloud.finalizeGame({
-          gameId: S.id, seed: S.seed, seedSource: S.seedSource,
-          date: S.date, options: S.options,
-          restored: header && header.k === 'header'
-            ? header.restored : null,
+          gameId: sess.id, seed: sess.seed, seedSource: sess.seedSource,
+          date: sess.date, options: sess.options,
+          parentGameId: sess.parentGameId || null,
+          forkTurn: sess.forkTurn != null ? sess.forkTurn : null,
+          restored: null,
           end: status, turns: endRec.turns, frames: endRec.frames,
           keysTotal: endRec.keysTotal,
           recordingText: recordingText(),
         });
-      } catch (e) { S.uploadFailed = true; }
+      } catch (e) { sess.uploadFailed = true; }
     });
   }
+
   const go = $('gameover');
   go.hidden = false;
   go.innerHTML = '';
   go.append(document.createTextNode(
-    `本局结束（status ${status}）。录制流 ${S.records.length} 条记录` +
-    (S.uploadFailed ? '（上传桩不可达，已保留在页面内存，可用下方按钮下载）'
-     : useCloud ? '，已分块上传至云端（Storage＋Firestore，状态 pending 待验真）'
-                : '，已分块上传至后端桩') + '。'));
+    `本局结束（共 ${turns} 回合）。` +
+    (useCloud
+      ? '已自动归档上云（Storage＋Firestore），正在触发后台验真。'
+      : '游客试玩局未上云；登录 Google 后每局均可自动保存、验真并入榜。')));
   if (S.seedSource === 'random') {
     const d = document.createElement('div');
     d.className = 'seed';
     d.textContent = '本局随机种子揭晓：' + S.seed;
     go.appendChild(d);
   }
-  refreshSaves();
+  const acts = document.createElement('div');
+  acts.className = 'go-actions';
+  const bNew = document.createElement('button');
+  bNew.type = 'button'; bNew.className = 'primary'; bNew.textContent = '返回开局页';
+  bNew.addEventListener('click', showSetup);
+  acts.appendChild(bNew);
+
+  if (turns >= 2) {
+    const ft = Math.max(1, turns - 1);
+    const bFork = document.createElement('button');
+    bFork.type = 'button';
+    bFork.textContent = `从死前（第 ${ft} 回合）分叉再试`;
+    bFork.addEventListener('click', () => forkSessionAt(S, ft));
+    acts.appendChild(bFork);
+  }
+  go.appendChild(acts);
+
+  updateZoomButton();
   renderBar();
 }
 
-function refreshSaves() {
-  const box = $('saves-box');
-  box.innerHTML = '';
-  let saves = [];
-  try { saves = globalThis.__airstring_list_saves() || []; } catch (e) { }
-  S.saves = saves.filter((n) => n !== '.keep');
-  for (const name of S.saves) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.textContent = '导出存档 ' + name;
-    b.addEventListener('click', () => {
-      const bytes = globalThis.__airstring_read_save(name);
-      const blob = new Blob([bytes], { type: 'application/octet-stream' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = name;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    });
-    box.appendChild(b);
+async function showSetup() {
+  stopReplayPlayback();
+  R = null;
+  if ($('replay')) $('replay').hidden = true;
+  if ($('mygames')) $('mygames').hidden = true;
+  if (location.hash && (location.hash.startsWith('#replay/') || location.hash === '#mygames')) {
+    try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { }
   }
-}
-
-function showSetup() {
+  if (S && !S.over && !S.buffering && !S.tabLocked && cloudActive()) {
+    saveLocalSnapshot();
+    await Promise.race([syncActiveToCloud(true), new Promise((r) => setTimeout(r, 2000))]);
+  }
+  try { sessionStorage.removeItem('airstring_last_active_game'); } catch (e) { }
+  teardownCurrentSession();
+  if (document.fullscreenElement && document.exitFullscreen) {
+    document.exitFullscreen().catch(() => { });
+  }
+  document.body.classList.remove('in-game');
+  toggleGameDrawer(false);
+  toggleMsgLog(false);
+  $('buffer-overlay').hidden = true;
+  $('tab-lock-overlay').hidden = true;
   $('game').hidden = true;
   $('setup').hidden = false;
+  setTopNavActive('setup');
   S = null;
+  refreshActiveGames(true);
+  loadVerifiedLobby();
 }
 
 /* ---------------- wiring ---------------- */
 $('setup-form').addEventListener('submit', (e) => {
   e.preventDefault();
-  startGame();
-});
-$('import-file').addEventListener('change', async (e) => {
-  const f = e.target.files[0];
-  if (!f) { pendingImport = null; $('import-info').textContent = ''; return; }
-  const buf = new Uint8Array(await f.arrayBuffer());
-  pendingImport = { name: f.name, bytes: buf };
-  $('import-info').textContent =
-    `已选择存档 ${f.name}（${buf.length} B），开局将恢复`;
+  startGame(null);
 });
 $('line-send').addEventListener('click', submitLine);
 $('line-cancel').addEventListener('click', () => sendBytes([27]));
@@ -960,16 +2585,924 @@ $('btn-commands').addEventListener('click', () =>
   togglePanel($('panel').hidden));
 $('panel-close').addEventListener('click', () => togglePanel(false));
 $('panel-search').addEventListener('input', (e) => renderPanel(e.target.value));
-$('btn-export-rec').addEventListener('click', () => {
-  if (!S) return;
-  const blob = new Blob([recordingText()], { type: 'application/json' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = S.id + '.jsonl';
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+$('btn-fork-now').addEventListener('click', () => {
+  if (!S || S.over || S.buffering) return;
+  const t = S.lastFrame ? S.lastFrame.turn : 0;
+  if (t < 1) return;
+  toggleGameDrawer(false);
+  forkSessionAt(S, t);
 });
-$('btn-newgame').addEventListener('click', showSetup);
+$('btn-newgame').addEventListener('click', () => showSetup());
+
+/* Multi-tab lock actions */
+$('btn-tab-back').addEventListener('click', () => showSetup());
+$('btn-tab-reclaim').addEventListener('click', async () => {
+  if (!S) return;
+  const gid = S.id;
+  const user = cloud && cloud.currentUser();
+  S.tabLocked = false;
+  $('tab-lock-overlay').hidden = true;
+  broadcastTabClaim(gid);
+  if (user) {
+    const latest = await loadBestSnapshot(user.uid, gid);
+    const curTurns = S.lastFrame ? (S.lastFrame.turn || 0) : 0;
+    if (latest && (latest.turns || 0) > curTurns) {
+      resumeActiveGameById(user.uid, gid, false);
+    }
+  }
+});
+
+/* Guest sign-in & active list refresh */
+$('btn-guest-signin').addEventListener('click', () => {
+  if (cloud && cloud.signIn) {
+    cloud.signIn().catch((e) => {
+      alert('Google 登录未完成：' + (e && e.message ? e.message : '请检查浏览器弹窗拦截或域名授权'));
+    });
+  } else {
+    alert('当前环境未连接 Firebase 登录服务。');
+  }
+});
+
+/* Phase 1 UI controls */
+$('msg-wrap').addEventListener('click', () => toggleMsgLog());
+$('msglog-close').addEventListener('click', () => toggleMsgLog(false));
+$('btn-drawer').addEventListener('click', () => toggleGameDrawer());
+$('btn-drawer-close').addEventListener('click', () => toggleGameDrawer(false));
+$('game-drawer-backdrop').addEventListener('click', () => toggleGameDrawer(false));
+$('btn-drawer-log').addEventListener('click', () => {
+  toggleGameDrawer(false);
+  toggleMsgLog(true);
+});
+$('btn-zoom').addEventListener('click', () => {
+  mobileZoomed = !mobileZoomed;
+  renderGrid();
+});
+$('btn-fullscreen').addEventListener('click', () => {
+  if (!document.fullscreenElement) {
+    if (document.documentElement.requestFullscreen) {
+      document.documentElement.requestFullscreen().catch(() => { });
+    }
+  } else if (document.exitFullscreen) {
+    document.exitFullscreen().catch(() => { });
+  }
+});
+document.addEventListener('fullscreenchange', () => {
+  $('btn-fullscreen').classList.toggle('active', !!document.fullscreenElement);
+  requestAnimationFrame(() => renderGrid());
+});
+$('btn-toggle-touch').addEventListener('click', () => {
+  const on = document.body.classList.toggle('show-touchbar');
+  $('btn-toggle-touch').classList.toggle('active', on);
+  requestAnimationFrame(() => renderGrid());
+});
+$('overlay-close-x').addEventListener('click', () => {
+  if (!S) return;
+  const mode = uiMode();
+  if (mode === 'menu') sendBytes([27]);
+  else sendKey(' ');
+});
+
+/* Phase 2b Gallery filters, role select, sort, search & +开新局 anchor */
+if ($('lobby-filters')) {
+  $('lobby-filters').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-filter]');
+    if (!btn) return;
+    lobbyFilter = btn.dataset.filter || 'all';
+    for (const el of $('lobby-filters').querySelectorAll('button[data-filter]')) {
+      el.classList.toggle('active', el === btn);
+    }
+    renderVerifiedGallery();
+  });
+}
+if ($('lobby-role-filter')) {
+  $('lobby-role-filter').addEventListener('change', () => renderVerifiedGallery());
+}
+if ($('lobby-sort')) {
+  $('lobby-sort').addEventListener('change', () => renderVerifiedGallery());
+}
+if ($('lobby-search')) {
+  $('lobby-search').addEventListener('input', () => renderVerifiedGallery());
+}
+if ($('btn-scroll-newgame')) {
+  $('btn-scroll-newgame').addEventListener('click', () => {
+    const target = $('enter-dungeon') || $('start-btn');
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+}
+
+/* ---------------- Phase 2: YouTube-style Replay Theater + Frame Cache + 1-Click Fork ---------------- */
+let R = null; /* active replay theater session */
+
+function stopReplayPlayback() {
+  if (!R) return;
+  R.playing = false;
+  if (R.playTimer) { clearInterval(R.playTimer); R.playTimer = null; }
+  const btn = $('btn-rep-play');
+  if (btn) btn.textContent = '▶ 播放';
+}
+
+function closeReplay(goBack = true) {
+  const fromPage = (R && R.fromPage) || 'setup';
+  stopReplayPlayback();
+  if (R) {
+    teardownCurrentSession();
+    R = null;
+  }
+  if ($('replay')) $('replay').hidden = true;
+  if (location.hash && location.hash.startsWith('#replay/')) {
+    try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { }
+  }
+  if (goBack) {
+    if (fromPage === 'mygames') {
+      showMyGames(false);
+    } else {
+      $('game').hidden = true;
+      if ($('mygames')) $('mygames').hidden = true;
+      $('setup').hidden = false;
+      setTopNavActive('setup');
+      document.body.classList.remove('in-game');
+      refreshActiveGames(false);
+      loadVerifiedLobby();
+    }
+  }
+}
+
+function renderReplayGrid(frameSnap) {
+  const grid = $('rep-grid');
+  const stage = $('rep-stage');
+  if (!grid || !stage || !frameSnap || !frameSnap.mapRows) return;
+  const sw = Math.max(120, stage.clientWidth - 12);
+  const sh = Math.max(100, stage.clientHeight - 12);
+  const fsW = Math.floor(sw / 80 / 0.605);
+  const fsH = Math.floor(sh / 21 / 1.17);
+  const fs = Math.max(5, Math.min(20, fsW, fsH));
+  grid.style.fontSize = fs + 'px';
+
+  if (grid.children.length !== 21) {
+    grid.innerHTML = '';
+    for (let y = 0; y < 21; y++) {
+      const row = document.createElement('div');
+      row.className = 'row';
+      grid.appendChild(row);
+    }
+  }
+  for (let y = 0; y < 21; y++) {
+    const rowEl = grid.children[y];
+    const line = String(frameSnap.mapRows[y] || '').padEnd(80, ' ');
+    const cols = (frameSnap.mapColors && frameSnap.mapColors[y]) || [];
+    rowEl.innerHTML = '';
+    let runColor = null;
+    let runText = '';
+    const flush = () => {
+      if (!runText) return;
+      const sp = document.createElement('span');
+      sp.className = 'c' + (runColor != null ? runColor : 7);
+      sp.textContent = runText;
+      rowEl.appendChild(sp);
+      runText = '';
+    };
+    for (let x = 0; x < 80; x++) {
+      const ch = line[x];
+      const c = typeof cols[x] === 'number' ? (cols[x] & 0xf) : 7;
+      if (ch === '@') {
+        flush();
+        const hs = document.createElement('span');
+        hs.className = 'c15 hero-at';
+        hs.textContent = '@';
+        rowEl.appendChild(hs);
+        runColor = null;
+      } else if (c === runColor) {
+        runText += ch;
+      } else {
+        flush();
+        runColor = c;
+        runText = ch;
+      }
+    }
+    flush();
+  }
+}
+
+function renderReplayStatus(frameSnap) {
+  const el = $('rep-status');
+  const fill = $('rep-hp-fill');
+  if (!el || !frameSnap) return;
+  el.innerHTML = '';
+  const mk = (cls, txt) => {
+    const s = document.createElement('span');
+    s.className = cls; s.textContent = txt;
+    return s;
+  };
+  const hp = frameSnap.hp ?? 0, hpmax = frameSnap.hpmax ?? 1;
+  const ratio = hpmax > 0 ? Math.max(0, Math.min(1, hp / hpmax)) : 1;
+  const hpCls = ratio <= 0.25 ? 'st-hp-crit' : ratio <= 0.55 ? 'st-hp-warn' : 'st-hp-ok';
+  if (fill) {
+    fill.style.width = Math.round(ratio * 100) + '%';
+    fill.style.background = ratio <= 0.25 ? 'var(--danger)' : ratio <= 0.55 ? 'var(--warn)' : 'var(--ok)';
+  }
+  const roleZh = (ROLES[R && R.game.roleKey] && ROLES[R.game.roleKey].zh) || (R && R.game.roleKey) || '';
+  el.append(
+    mk('st-name', (R && R.game.name) || 'fleck'),
+    mk('st-role', roleZh),
+    mk('st-dlvl', `Dlvl:${frameSnap.dlvl ?? 1}`),
+    mk(hpCls, `HP:${hp}/${hpmax}`),
+    mk('st-pw', `Pw:${frameSnap.pw ?? 0}/${frameSnap.pwmax ?? 0}`),
+    mk('', `AC:${frameSnap.ac ?? 0}`),
+    mk('st-gold', `$:${frameSnap.gold ?? 0}`),
+    mk('', `T:${frameSnap.turn ?? 0}`),
+  );
+}
+
+function renderReplayFrame(idx) {
+  if (!R || !R.frames.length) return;
+  const clamped = Math.max(0, Math.min(R.frames.length - 1, idx));
+  R.curIdx = clamped;
+  const snap = R.frames[clamped];
+  $('rep-msg-prev').textContent = snap.msgPrev || '';
+  $('rep-msg').textContent = snap.msgCur || '';
+  renderReplayGrid(snap);
+  renderReplayStatus(snap);
+
+  const seek = $('rep-seek');
+  if (seek) {
+    seek.max = String(Math.max(0, R.frames.length - 1));
+    seek.value = String(clamped);
+  }
+  const totalTurns = R.frames[R.frames.length - 1].turn || R.frames.length;
+  $('rep-time').textContent = `回合 ${snap.turn} / ${totalTurns}`;
+  const forkBtn = $('btn-rep-fork');
+  if (forkBtn) {
+    forkBtn.disabled = false;
+    forkBtn.textContent = `⚡ 从第 ${snap.turn} 回合分叉由我来打`;
+  }
+  const turnLbl = $('rep-comment-turn-label');
+  if (turnLbl) {
+    turnLbl.textContent = `📍 关联当前第 ${snap.turn} 回合`;
+  }
+}
+
+function startReplayPlayback() {
+  if (!R || !R.frames.length || R.buffering) return;
+  if (R.curIdx >= R.frames.length - 1) renderReplayFrame(0);
+  R.playing = true;
+  $('btn-rep-play').textContent = '⏸ 暂停';
+  if (R.playTimer) clearInterval(R.playTimer);
+  const speed = parseFloat(($('rep-speed') && $('rep-speed').value) || '1') || 1;
+  const intervalMs = Math.max(35, Math.round(360 / speed));
+  R.playTimer = setInterval(() => {
+    if (!R || !R.playing) return;
+    if (R.curIdx >= R.frames.length - 1) {
+      stopReplayPlayback();
+      return;
+    }
+    renderReplayFrame(R.curIdx + 1);
+  }, intervalMs);
+}
+
+function renderReplayPassport(g) {
+  const box = $('rep-passport');
+  if (!box) return;
+  box.innerHTML = '';
+  const kv = (k, v, node) => {
+    const row = document.createElement('div');
+    row.className = 'rep-kv';
+    const ks = document.createElement('span');
+    ks.className = 'k'; ks.textContent = k;
+    row.appendChild(ks);
+    if (node) {
+      row.appendChild(node);
+    } else {
+      const vs = document.createElement('span');
+      vs.className = 'v'; vs.textContent = v;
+      row.appendChild(vs);
+    }
+    box.appendChild(row);
+  };
+  const roleZh = (ROLES[g.roleKey] && ROLES[g.roleKey].zh) || g.roleKey;
+  kv('状态', `✓ 已验真（${g.framesMatched}/${g.framesCompared} 帧）`);
+  kv('角色', `${g.name} · ${roleZh}`);
+  kv('种子', `#${g.seed}（${g.seedSource}）`);
+  kv('最深层数', g.maxDlvl ? `Dlvl ${g.maxDlvl}` : 'Dlvl 1');
+  kv('结局', g.outcome === 'ascended' ? '🏆 飞升' : g.outcome === 'died' ? '💀 阵亡' : '退出/结束');
+  if (g.deathReason) kv('战报', g.deathReason);
+  if (g.recordingSha256) kv('SHA-256', g.recordingSha256.slice(0, 16) + '…');
+  if (g.parentGameId) {
+    const pBtn = document.createElement('button');
+    pBtn.type = 'button';
+    pBtn.className = 'rep-link-btn';
+    pBtn.textContent = `${g.parentGameId} (T${g.forkTurn ?? 0})`;
+    pBtn.addEventListener('click', () => openReplayById(g.parentGameId));
+    kv('分叉来源', '', pBtn);
+  }
+}
+
+async function loadForkTree(gameId) {
+  const box = $('rep-forks-list');
+  if (!box) return;
+  const cfg = globalThis.AIRSTRING_FIREBASE_CONFIG;
+  const project = cfg && cfg.projectId;
+  if (!project || project.startsWith('REPLACE_')) {
+    box.innerHTML = '<div class="hint">本地模式无分叉树索引。</div>';
+    return;
+  }
+  box.innerHTML = '<div class="hint">查询子分叉中…</div>';
+  try {
+    const url = 'https://firestore.googleapis.com/v1/projects/' +
+      encodeURIComponent(project) + '/databases/(default)/documents:runQuery';
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId: 'games' }],
+          where: {
+            compositeFilter: {
+              op: 'AND',
+              filters: [
+                {
+                  fieldFilter: {
+                    field: { fieldPath: 'parentGameId' },
+                    op: 'EQUAL',
+                    value: { stringValue: gameId },
+                  },
+                },
+                {
+                  fieldFilter: {
+                    field: { fieldPath: 'status' },
+                    op: 'EQUAL',
+                    value: { stringValue: 'verified' },
+                  },
+                },
+              ],
+            },
+          },
+          orderBy: [{ field: { fieldPath: 'createdAt' }, direction: 'DESCENDING' }],
+          limit: 20,
+        },
+      }),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const rows = await r.json();
+    const forks = rows
+      .filter((x) => x.document && x.document.fields)
+      .map((x) => parseGameDoc(x.document));
+    if (!forks.length) {
+      box.innerHTML = '<div class="hint">暂无公开已验真分叉。拖动进度条到任意回合，点左侧「分叉由我来打」成为第一条分支！</div>';
+      return;
+    }
+    box.innerHTML = '';
+    for (const fk of forks) {
+      const roleZh = (ROLES[fk.roleKey] && ROLES[fk.roleKey].zh) || fk.roleKey;
+      const item = document.createElement('div');
+      item.className = 'fork-tree-item';
+      const top = document.createElement('div');
+      top.className = 'fork-tree-top';
+      const nm = document.createElement('span');
+      nm.textContent = `${fk.name} · ${roleZh}`;
+      const badge = document.createElement('span');
+      badge.className = 'ag-badge fork';
+      badge.textContent = `从 T${fk.forkTurn ?? 0} 分叉`;
+      top.append(nm, badge);
+
+      const meta = document.createElement('div');
+      meta.className = 'fork-tree-meta';
+      meta.textContent = `Dlvl:${fk.maxDlvl || 1} · 共 ${fk.turns} 回合 · ${fk.deathReason || fk.outcome || '已验真'}`;
+
+      item.append(top, meta);
+      if (fk.publicRecordingPath) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'mini-btn';
+        b.textContent = '▶ 观看此分支';
+        b.addEventListener('click', () => openReplay(fk));
+        item.appendChild(b);
+      }
+      box.appendChild(item);
+    }
+  } catch (e) {
+    box.innerHTML = '<div class="hint">分叉树查询暂不可用（索引构建中或网络不可达）。</div>';
+  }
+}
+
+async function openReplayById(gameId) {
+  const g = await fetchGameDocById(gameId);
+  if (!g) {
+    alert('未找到该公开已验真对局：' + gameId);
+    return;
+  }
+  if (!canWatchGame(g)) {
+    alert('该历史对局尚未生成公开录像文件。');
+    return;
+  }
+  openReplay(g, { fromPage: 'setup' });
+}
+
+async function openReplay(gameDoc, opts = {}) {
+  const snapshot = opts && opts.snapshot ? opts.snapshot : null;
+  const fromPage = (opts && opts.fromPage) || 'setup';
+  if (!gameDoc || (!snapshot && !canWatchGame(gameDoc))) {
+    alert('该对局暂无可读取的录像文件。');
+    return;
+  }
+  stopReplayPlayback();
+  teardownCurrentSession();
+  S = null;
+  const sid = activeSessionToken;
+
+  document.body.classList.remove('in-game');
+  $('setup').hidden = true;
+  $('game').hidden = true;
+  if ($('mygames')) $('mygames').hidden = true;
+  $('replay').hidden = false;
+  setTopNavActive('');
+  if (!snapshot) {
+    try { history.replaceState(null, '', '#replay/' + encodeURIComponent(gameDoc.gameId)); } catch (e) { }
+  }
+
+  const roleZh = (ROLES[gameDoc.roleKey] && ROLES[gameDoc.roleKey].zh) || gameDoc.roleKey;
+  $('rep-title').textContent = `${gameDoc.name} · ${roleZh} · 种子 #${gameDoc.seed}`;
+  $('rep-badge').textContent = snapshot ? `进行中 · T${gameDoc.turns}`
+    : gameDoc.status === 'pending' ? '⏳ 待验真（本人录像）'
+    : gameDoc.outcome === 'ascended' ? '🏆 飞升 · 已验真'
+    : gameDoc.outcome === 'died' ? '💀 阵亡 · 已验真'
+    : `✓ ${gameDoc.framesMatched} 帧已验真`;
+  $('btn-rep-back').textContent = fromPage === 'mygames' ? '← 返回我的对局' : '← 返回大厅';
+  $('btn-rep-share').hidden = !gameDoc.publicRecordingPath;
+  $('btn-rep-fork').disabled = true;
+  $('rep-seek').value = '0';
+  $('rep-seek').max = '0';
+  $('rep-time').textContent = '缓冲中…';
+  $('rep-buffer-overlay').hidden = false;
+  $('rep-buffer-title').textContent = '正在缓冲回放帧…';
+  $('rep-buffer-fill').style.width = '5%';
+  $('rep-buffer-detail').textContent = snapshot ? '正在加载进行中进度…' : '正在下载录像流…';
+
+  renderReplayPassport(gameDoc);
+  loadForkTree(gameDoc.gameId);
+
+  R = {
+    sid,
+    fromPage,
+    isSnapshot: !!snapshot,
+    game: gameDoc,
+    header: null,
+    turns: [],
+    frames: [],
+    curIdx: 0,
+    playing: false,
+    playTimer: null,
+    buffering: true,
+    curMapRows: null,
+    curMapColors: null,
+    msgs: [],
+  };
+  loadReplayComments(gameDoc, !!snapshot);
+
+  try {
+    let records = [];
+    if (snapshot) {
+      records = Array.isArray(snapshot.records) ? snapshot.records : [];
+    } else {
+      let text = null;
+      if (gameDoc.publicRecordingPath) {
+        const cfg = globalThis.AIRSTRING_FIREBASE_CONFIG || {};
+        const bucket = cfg.storageBucket || ((cfg.projectId || 'airstring-nethack') + '.firebasestorage.app');
+        const dlUrl = 'https://firebasestorage.googleapis.com/v0/b/' +
+          encodeURIComponent(bucket) + '/o/' +
+          encodeURIComponent(gameDoc.publicRecordingPath) + '?alt=media';
+        const resp = await fetch(dlUrl);
+        if (resp.ok) text = await resp.text();
+      }
+      if (text == null && cloudActive() && cloud.loadOwnRecording) {
+        text = await cloud.loadOwnRecording(gameDoc.gameId);
+      }
+      if (!text) throw new Error('未能读取到录像流（请检查网络或确认登录账号）');
+      if (!R || R.sid !== sid) return;
+      const lines = text.split('\n').filter((l) => l.trim());
+      records = lines.map((l) => JSON.parse(l));
+    }
+
+    const header = records.find((r) => r && r.k === 'header');
+    const turns = records.filter((r) => r && r.k === 'turn');
+    if (!header || !turns.length) throw new Error('录像无有效回合记录');
+    R.header = header;
+    R.turns = turns;
+    const replayBytes = concatReplayBytes(records, snapshot ? snapshot.pendingKeys : null);
+
+    $('rep-buffer-detail').textContent = `引擎重放缓存中：0 / ${turns.length} 回合`;
+
+    let pumpStarted = false;
+    function finishReplayBuffer() {
+      if (!R || R.sid !== sid || !R.buffering) return;
+      R.buffering = false;
+      $('rep-buffer-fill').style.width = '100%';
+      $('rep-buffer-overlay').hidden = true;
+      if (typeof globalThis.__airstring_close_keys === 'function') {
+        try { globalThis.__airstring_close_keys(); } catch (e) { }
+      }
+      if (R.frames.length) {
+        renderReplayFrame(snapshot ? R.frames.length - 1 : 0);
+      } else {
+        $('rep-time').textContent = '无可显示帧';
+      }
+    }
+
+    function pumpReplayKeys() {
+      let off = 0;
+      const CHUNK = 48;
+      function step() {
+        if (!R || R.sid !== sid || !R.buffering) return;
+        const q = globalThis.__airstring_key_queue;
+        if (q && q.pos < q.bytes.length) {
+          setTimeout(step, 4);
+          return;
+        }
+        if (off < replayBytes.length) {
+          const end = Math.min(off + CHUNK, replayBytes.length);
+          globalThis.__airstring_push_keys(replayBytes.subarray(off, end));
+          off = end;
+          const pct = Math.min(99, Math.max(5, Math.round((R.frames.length / Math.max(1, turns.length)) * 100)));
+          $('rep-buffer-fill').style.width = pct + '%';
+          $('rep-buffer-detail').textContent = `引擎重放缓存中：${R.frames.length} / ${turns.length} 回合（${pct}%）`;
+          setTimeout(step, 0);
+          return;
+        }
+        setTimeout(() => {
+          if (!R || R.sid !== sid || !R.buffering) return;
+          const q2 = globalThis.__airstring_key_queue;
+          if (q2 && q2.pos < q2.bytes.length) { setTimeout(step, 4); return; }
+          finishReplayBuffer();
+        }, 45);
+      }
+      step();
+    }
+
+    globalThis.__airstring_config = {
+      seed: String(header.seed),
+      date: header.date || FIXED_DATE,
+      options: header.options,
+      mode: 'async',
+      exportPath: '/fleck.frames',
+      rngPath: '/fleck.rng',
+    };
+    globalThis.__airstring_key_queue = { bytes: [], pos: 0, closed: false };
+    globalThis.__airstring_event = (json) => {
+      if (!R || R.sid !== sid) return;
+      let ev;
+      try { ev = JSON.parse(json); } catch (e) { return; }
+      if (ev.t === 'init' && !pumpStarted) {
+        pumpStarted = true;
+        pumpReplayKeys();
+      } else if (ev.t === 'map' && Array.isArray(ev.rows)) {
+        R.curMapRows = ev.rows.slice();
+        R.curMapColors = Array.isArray(ev.colors)
+          ? ev.colors.map((r) => (Array.isArray(r) ? r.slice() : [])) : null;
+      } else if ((ev.t === 'message' || ev.t === 'raw') && ev.text) {
+        R.msgs.push(ev.text);
+        if (R.msgs.length > 20) R.msgs.shift();
+      }
+    };
+    globalThis.__airstring_frame = (frameText) => {
+      if (!R || R.sid !== sid) return;
+      const pf = parseFrame(frameText);
+      const len = R.msgs.length;
+      R.frames.push({
+        turn: pf.turn ?? (R.frames.length + 1),
+        frame: pf.frame ?? R.frames.length,
+        hp: pf.hp, hpmax: pf.hpmax, pw: pf.pw, pwmax: pf.pwmax,
+        ac: pf.ac, xl: pf.xl, gold: pf.gold, dlvl: pf.dlevel,
+        mapRows: R.curMapRows ? R.curMapRows.slice() : null,
+        mapColors: R.curMapColors ? R.curMapColors.map((r) => r.slice()) : null,
+        msgPrev: len >= 2 ? R.msgs[len - 2] : '',
+        msgCur: len >= 1 ? R.msgs[len - 1] : '',
+      });
+    };
+    globalThis.__airstring_rngline = () => { };
+    globalThis.__airstring_game_over = () => {
+      if (R && R.sid === sid && R.buffering) finishReplayBuffer();
+    };
+
+    const { default: createModule } = await import('./nethack.js');
+    await createModule({ print: () => { }, printErr: () => { } });
+  } catch (e) {
+    if (R && R.sid === sid) {
+      $('rep-buffer-title').textContent = '回放加载失败';
+      $('rep-buffer-detail').textContent = String(e && e.message ? e.message : e);
+    }
+  }
+}
+
+function forkFromReplay() {
+  if (!R || !R.frames.length || !R.header) return;
+  const snap = R.frames[R.curIdx];
+  const targetTurn = snap.turn || (R.curIdx + 1);
+  const sliced = R.turns.filter((t) => (t.turn || 0) <= targetTurn);
+  const forkTurn = sliced.length ? (sliced[sliced.length - 1].turn || sliced.length) : 0;
+  const replayBytes = concatReplayBytes(sliced, null);
+  const expectedHashes = sliced.map((t) => t.hash);
+  const hdr = R.header;
+  const parentId = R.game.gameId;
+
+  closeReplay(false);
+  startGame({
+    mode: 'fork',
+    seed: hdr.seed,
+    seedSource: 'fork',
+    options: hdr.options,
+    parentGameId: parentId,
+    forkTurn,
+    replayBytes,
+    expectedTurns: forkTurn,
+    expectedHashes,
+  });
+}
+
+/* ---------------- Phase 2b: Turn-anchored Replay Comments ---------------- */
+let replayCommentsCache = [];
+let lastCommentSentAt = 0;
+
+function updateReplayCommentAuthUi() {
+  const card = $('rep-comments-card');
+  const form = $('rep-comment-form');
+  const guest = $('rep-comment-guest');
+  if (!card || !R) return;
+  const isVerifiedPublic = R.game && R.game.status === 'verified' && !R.isSnapshot;
+  card.hidden = !isVerifiedPublic;
+  if (!isVerifiedPublic) return;
+  const user = cloud && cloud.currentUser();
+  if (form) form.hidden = !user;
+  if (guest) guest.hidden = !!user;
+}
+
+function jumpReplayToTurn(targetTurn) {
+  if (!R || !R.frames.length || R.buffering) return;
+  stopReplayPlayback();
+  let bestIdx = 0;
+  for (let i = 0; i < R.frames.length; i++) {
+    if ((R.frames[i].turn || 0) <= targetTurn) bestIdx = i;
+    else break;
+  }
+  renderReplayFrame(bestIdx);
+  const stage = $('rep-stage');
+  if (stage) stage.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function renderReplayComments() {
+  const list = $('rep-comments-list');
+  const countEl = $('rep-comments-count');
+  if (!list) return;
+  if (countEl) countEl.textContent = replayCommentsCache.length ? `(${replayCommentsCache.length})` : '';
+  if (!replayCommentsCache.length) {
+    list.innerHTML = '<div class="hint">暂无留言，来写下第一条带回合锚点的点评吧！</div>';
+    return;
+  }
+  const me = cloud && cloud.currentUser();
+  const gameOwnerUid = R && R.game ? R.game.uid : null;
+  list.innerHTML = '';
+  for (const c of replayCommentsCache) {
+    const item = document.createElement('div');
+    item.className = 'rep-comment-item';
+
+    const head = document.createElement('div');
+    head.className = 'rep-comment-head';
+
+    const left = document.createElement('span');
+    left.className = 'rep-comment-author';
+    if (c.turn != null && Number.isFinite(c.turn)) {
+      const pill = document.createElement('button');
+      pill.type = 'button';
+      pill.className = 'comment-turn-pill';
+      pill.textContent = `T${c.turn}`;
+      pill.title = `跳转到第 ${c.turn} 回合`;
+      pill.addEventListener('click', () => jumpReplayToTurn(c.turn));
+      left.appendChild(pill);
+    }
+    left.append(document.createTextNode(c.authorName || '冒险者'));
+
+    const right = document.createElement('span');
+    right.className = 'rep-comment-meta';
+    right.append(document.createTextNode(formatRelativeTime(c.createdAt)));
+    if (me && (c.uid === me.uid || (gameOwnerUid && gameOwnerUid === me.uid))) {
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'card-link-act danger';
+      del.textContent = '删除';
+      del.addEventListener('click', async () => {
+        if (!R || !confirm('确定删除这条留言？')) return;
+        try {
+          await cloud.deleteReplayComment(R.game.gameId, c.id);
+          replayCommentsCache = replayCommentsCache.filter((x) => x.id !== c.id);
+          renderReplayComments();
+        } catch (err) {
+          alert('删除留言失败：' + (err && err.message ? err.message : err));
+        }
+      });
+      right.appendChild(del);
+    }
+
+    head.append(left, right);
+    const body = document.createElement('div');
+    body.className = 'rep-comment-text';
+    body.textContent = c.text || '';
+
+    item.append(head, body);
+    list.appendChild(item);
+  }
+}
+
+async function loadReplayComments(gameDoc, isSnapshot) {
+  replayCommentsCache = [];
+  if (R) R.isSnapshot = !!isSnapshot;
+  updateReplayCommentAuthUi();
+  const list = $('rep-comments-list');
+  const countEl = $('rep-comments-count');
+  if (countEl) countEl.textContent = '';
+  if (!list || isSnapshot || !gameDoc || gameDoc.status !== 'verified') return;
+
+  const cfg = globalThis.AIRSTRING_FIREBASE_CONFIG;
+  const project = cfg && cfg.projectId;
+  if (!project || project.startsWith('REPLACE_')) {
+    list.innerHTML = '<div class="hint">本地模式暂不支持留言。</div>';
+    return;
+  }
+  list.innerHTML = '<div class="hint">加载留言中…</div>';
+  try {
+    const url = 'https://firestore.googleapis.com/v1/projects/' +
+      encodeURIComponent(project) + '/databases/(default)/documents/games/' +
+      encodeURIComponent(gameDoc.gameId) + ':runQuery';
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId: 'comments' }],
+          orderBy: [{ field: { fieldPath: 'createdAt' }, direction: 'DESCENDING' }],
+          limit: 30,
+        },
+      }),
+    });
+    if (!r.ok) {
+      if (r.status === 403) {
+        list.innerHTML = '<div class="hint">留言区即将开放（等待后端规则审核生效）。</div>';
+        return;
+      }
+      throw new Error('HTTP ' + r.status);
+    }
+    const rows = await r.json();
+    replayCommentsCache = rows
+      .filter((x) => x.document && x.document.fields)
+      .map((x) => {
+        const f = x.document.fields;
+        return {
+          id: x.document.name.split('/').pop(),
+          uid: fsVal(f.uid) || '',
+          authorName: fsVal(f.authorName) || '冒险者',
+          text: fsVal(f.text) || '',
+          turn: fsVal(f.turn),
+          createdAt: fsVal(f.createdAt) || '',
+        };
+      });
+    renderReplayComments();
+  } catch (e) {
+    list.innerHTML = '<div class="hint">留言暂不可用。</div>';
+  }
+}
+
+/* Top nav & My Games page wiring */
+$('nav-lobby').addEventListener('click', () => showSetup());
+$('nav-mygames').addEventListener('click', () => showMyGames(false));
+$('btn-mygames-new').addEventListener('click', () => {
+  showSetup().then(() => {
+    const target = $('enter-dungeon') || $('start-btn');
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+});
+$('btn-mygames-signin').addEventListener('click', () => {
+  if (cloud && cloud.signIn) {
+    cloud.signIn().catch((e) => {
+      alert('Google 登录未完成：' + (e && e.message ? e.message : '请检查弹窗拦截'));
+    });
+  }
+});
+
+/* Replay controls & comment form wiring */
+$('btn-rep-back').addEventListener('click', () => closeReplay(true));
+$('btn-rep-sameseed').addEventListener('click', () => {
+  if (!R || !R.game) return;
+  const g = R.game;
+  closeReplay(false);
+  showSetup().then(() => {
+    const givenRadio = document.querySelector('input[name="seedmode"][value="given"]');
+    if (givenRadio) givenRadio.checked = true;
+    if (/^\d+$/.test(String(g.seed))) $('seed-input').value = String(g.seed);
+    if (ROLES[g.roleKey]) {
+      $('opt-role').value = g.roleKey;
+      $('opt-role').dispatchEvent(new Event('change'));
+    }
+    const target = $('enter-dungeon') || $('start-btn');
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+});
+$('btn-rep-share').addEventListener('click', () => {
+  const url = location.href;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(() => {
+      const b = $('btn-rep-share');
+      b.textContent = '✓ 已复制链接';
+      setTimeout(() => { b.textContent = '🔗 复制链接'; }, 2000);
+    }).catch(() => prompt('复制此回放链接：', url));
+  } else {
+    prompt('复制此回放链接：', url);
+  }
+});
+$('rep-comment-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!R || !R.game || !cloudActive()) return;
+  const inp = $('rep-comment-input');
+  const text = (inp.value || '').trim();
+  if (!text) return;
+  if (Date.now() - lastCommentSentAt < 5000) {
+    alert('发言太快啦，请 5 秒后再试。');
+    return;
+  }
+  const sendBtn = $('btn-rep-comment-send');
+  const includeTurn = $('rep-comment-turn-chk') && $('rep-comment-turn-chk').checked;
+  const curTurn = (R.frames && R.frames[R.curIdx]) ? (R.frames[R.curIdx].turn || 0) : null;
+  if (sendBtn) sendBtn.disabled = true;
+  try {
+    const created = await cloud.addReplayComment(R.game.gameId, {
+      text,
+      turn: includeTurn ? curTurn : null,
+    });
+    lastCommentSentAt = Date.now();
+    inp.value = '';
+    replayCommentsCache.unshift(created);
+    renderReplayComments();
+  } catch (err) {
+    alert('留言提交失败（若规则刚提交审核请稍后再试）：' + (err && err.message ? err.message : err));
+  } finally {
+    if (sendBtn) sendBtn.disabled = false;
+  }
+});
+$('btn-rep-start').addEventListener('click', () => { stopReplayPlayback(); renderReplayFrame(0); });
+$('btn-rep-rew').addEventListener('click', () => { stopReplayPlayback(); if (R) renderReplayFrame(R.curIdx - 5); });
+$('btn-rep-prev').addEventListener('click', () => { stopReplayPlayback(); if (R) renderReplayFrame(R.curIdx - 1); });
+$('btn-rep-next').addEventListener('click', () => { stopReplayPlayback(); if (R) renderReplayFrame(R.curIdx + 1); });
+$('btn-rep-fwd').addEventListener('click', () => { stopReplayPlayback(); if (R) renderReplayFrame(R.curIdx + 5); });
+$('btn-rep-play').addEventListener('click', () => {
+  if (!R || R.buffering) return;
+  if (R.playing) stopReplayPlayback();
+  else startReplayPlayback();
+});
+$('rep-speed').addEventListener('change', () => {
+  if (R && R.playing) startReplayPlayback();
+});
+$('rep-seek').addEventListener('input', (e) => {
+  stopReplayPlayback();
+  renderReplayFrame(parseInt(e.target.value, 10) || 0);
+});
+$('btn-rep-fork').addEventListener('click', () => forkFromReplay());
+
+document.addEventListener('keydown', (e) => {
+  if (!R || $('replay').hidden) return;
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return;
+  if (e.key === ' ') {
+    e.preventDefault();
+    if (R.playing) stopReplayPlayback(); else startReplayPlayback();
+  } else if (e.key === 'ArrowLeft') {
+    e.preventDefault();
+    stopReplayPlayback();
+    renderReplayFrame(R.curIdx - (e.shiftKey ? 5 : 1));
+  } else if (e.key === 'ArrowRight') {
+    e.preventDefault();
+    stopReplayPlayback();
+    renderReplayFrame(R.curIdx + (e.shiftKey ? 5 : 1));
+  } else if (e.key === 'Escape') {
+    closeReplay(true);
+  }
+});
+window.addEventListener('resize', () => {
+  if (R && !R.buffering && R.frames.length && !$('replay').hidden) {
+    renderReplayFrame(R.curIdx);
+  }
+});
+
+/* Deep links: #replay/<gameId> and #mygames */
+function checkRouteHash() {
+  const h = location.hash || '';
+  const m = /^#replay\/(.+)$/.exec(h);
+  if (m) {
+    const gid = decodeURIComponent(m[1]);
+    if (!R || R.game.gameId !== gid) openReplayById(gid);
+    return;
+  }
+  if (h === '#mygames') {
+    if ($('mygames') && $('mygames').hidden) showMyGames(true);
+  }
+}
+window.addEventListener('hashchange', checkRouteHash);
+
 /* after a tap, drop focus from the button so a following Space /
    Enter keypress is a game key, not a second button activation */
 document.addEventListener('click', (e) => {
@@ -979,15 +3512,24 @@ document.addEventListener('click', (e) => {
 
 fillSetupForm();
 renderBar();
+loadVerifiedLobby();
+if (cloud && cloud.onUserChange) {
+  cloud.onUserChange((u) => onAuthChanged(u));
+} else {
+  if ($('guest-banner')) $('guest-banner').hidden = false;
+}
+checkRouteHash();
 
 /* read-only test/inspection hook (used by the S5 gate driver) */
 window.__airstring_debug = {
   state: () => S ? {
     gameId: S.id, started: S.started, over: S.over,
     overStatus: S.overStatus, mode: uiMode(),
+    buffering: !!S.buffering, tabLocked: !!S.tabLocked,
+    parentGameId: S.parentGameId, forkTurn: S.forkTurn,
     counters: { ...S.counters }, keysTotal: S.keysTotal,
     lastFrame: S.lastFrame, underHero: S.underHero,
-    heroPos: S.heroPos, saves: S.saves, records: S.records.length,
+    heroPos: S.heroPos, records: S.records.length,
     uploadOk: S.uploadOk || 0, uploadFailed: !!S.uploadFailed,
     prompt: S.prompt, seed: S.seed, seedSource: S.seedSource,
     eventTail: S.eventTail || [],
@@ -995,3 +3537,5 @@ window.__airstring_debug = {
   } : null,
   records: () => (S ? S.records : []),
 };
+
+

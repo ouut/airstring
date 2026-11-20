@@ -1,1 +1,55 @@
-{"emulators":{"auth":{"port":9099},"firestore":{"port":8080},"hosting":{"port":5000},"storage":{"port":9199},"ui":{"enabled":true}},"firestore":{"indexes":"firestore.indexes.json","rules":"firestore.rules"},"hosting":{"headers":[{"headers":[{"key":"Cache-Control","value":"public, max-age=604800"}],"source":"/nethack.wasm"},{"headers":[{"key":"Cache-Control","value":"public, max-age=604800"}],"source":"/nethack.js"}],"ignore":["firebase.json","**/.*","**/node_modules/**"],"predeploy":["node tools/assemble-dist.mjs"],"public":"dist"},"storage":{"rules":"storage.rules"}}
+{
+  "emulators": {
+    "auth": { "port": 9099 },
+    "firestore": { "port": 8080 },
+    "hosting": { "port": 5000 },
+    "storage": { "port": 9199 },
+    "ui": { "enabled": true }
+  },
+  "firestore": {
+    "indexes": "firestore.indexes.json",
+    "rules": "firestore.rules"
+  },
+  "hosting": {
+    "headers": [
+      {
+        "source": "/nethack.wasm",
+        "headers": [{ "key": "Cache-Control", "value": "public, max-age=604800" }]
+      },
+      {
+        "source": "/nethack.js",
+        "headers": [{ "key": "Cache-Control", "value": "public, max-age=604800" }]
+      },
+      {
+        "source": "/airstring.js",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      },
+      {
+        "source": "/airstring.css",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      },
+      {
+        "source": "/firebase.js",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      },
+      {
+        "source": "/firebase-config.js",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      },
+      {
+        "source": "/commands.js",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      },
+      {
+        "source": "/index.html",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      }
+    ],
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "predeploy": ["node tools/assemble-dist.mjs"],
+    "public": "dist"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  }
+}

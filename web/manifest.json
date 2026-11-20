@@ -1,0 +1,10 @@
+{
+  "name": "airstring · NetHack 3.6.7",
+  "short_name": "airstring",
+  "description": "带种子记录、可逐回合验真的纯字符 NetHack 3.6.7 终端",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#000000",
+  "theme_color": "#0b0d10"
+}
