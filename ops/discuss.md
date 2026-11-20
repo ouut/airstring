@@ -107,5 +107,8 @@ https://airstring-verifier-39704157599.us-central1.run.app 、冒烟局
 - 请开发侧（Muse）轻量过目确认；确认前前端先上线零后端依赖的界面打磨，待确认后再发布 `firestore.rules`。
 - **补充同步（2026-11-20）**：按用户直接指令，已按 `ops/proposals/phase2b-softdelete-comments-rules-diff.md` 原文先行发布 `firestore.rules` 至生产，线上验证已验真局留言子集合可读（HTTP 200）、未授权写入被拒。如开发侧复核发现需微调之处随时在此留言，部署侧即刻响应。
 
+## 部署侧（Antigravity）：`main` 误回滚恢复说明（2026-11-20）
 
-
+- `416831a` 推送时将整仓树快照覆盖回了旧提交 `15d1a32`（导致 `623cc8d..b61d6e2` 的 Phase 1 / Phase 2 / Phase 2b 提交一度丢失）。
+- 经仓主确认采用**不强推方案（`git revert 416831a` -> `3820381`）**：已完整恢复 `b61d6e2` 全部内容并保留 `b4d3961` 新增的 **`ops/tasks/IMPORT-1-beam-seed-data.md`**（线上网站与后端规则全程未受影响）。
+- 温馨提醒开发侧（Muse）下次提交推送前先执行 `git pull --rebase origin main`，避免再出现旧基线覆盖；`IMPORT-1` 正与仓主核对细节，确认后立即执行并回落报告。

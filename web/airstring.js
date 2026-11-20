@@ -25,7 +25,7 @@ import { COMMANDS, DIRS, dirByte } from './commands.js';
  * In every other case `cloud` is null (or reports no user) and the
  * upload path below is the S5 local-stub behaviour, unchanged. */
 let cloud = null;
-try { cloud = (await import('./firebase.js?v=p2fix3')).default; }
+try { cloud = (await import('./firebase.js?v=p2fix4')).default; }
 catch (e) { cloud = null; }
 function cloudActive() { return !!(cloud && cloud.currentUser()); }
 
@@ -1877,7 +1877,7 @@ function renderActiveGameCard(item, uid, fromPage = 'mygames') {
   const card = document.createElement('article');
   card.className = 'vgame-card clickable';
   card.title = '点击继续游玩';
-  card.addEventListener('click', () => resumeActiveGameById(uid, item.gameId, false));
+  card.addEventListener('click', () => resumeActiveGameById(uid, item.gameId, false, 'mygames'));
 
   /* Pure-black 35x11 ASCII thumbnail (consistent with finished cards) */
   const thumbWrap = document.createElement('div');
@@ -2193,7 +2193,7 @@ async function loadBestSnapshot(uid, gameId) {
   return String(remote.updatedAt || '') > String(local.updatedAt || '') ? remote : local;
 }
 
-async function resumeActiveGameById(uid, gameId, asFork) {
+async function resumeActiveGameById(uid, gameId, asFork, returnPage = 'setup') {
   const snap = await loadBestSnapshot(uid, gameId);
   if (!snap) {
     alert('未找到该对局记录，可能已被清理。');
@@ -2218,6 +2218,7 @@ async function resumeActiveGameById(uid, gameId, asFork) {
       replayBytes,
       expectedTurns,
       expectedHashes,
+      returnPage,
     });
   } else {
     await startGame({
@@ -2233,6 +2234,7 @@ async function resumeActiveGameById(uid, gameId, asFork) {
       replayBytes,
       expectedTurns,
       expectedHashes,
+      returnPage,
     });
   }
 }
@@ -2406,6 +2408,14 @@ async function startGame(plan) {
     try { sessionStorage.setItem('airstring_last_active_game', gameId); } catch (e) { }
   }
 
+  gameReturnPage = plan
+    ? (plan.returnPage || gameReturnPage || 'setup')
+    : (newGameFromPage || 'setup');
+  const gameBackBtn = $('btn-game-back');
+  if (gameBackBtn) {
+    gameBackBtn.textContent = gameReturnPage === 'mygames' ? '← 对局' : '← 大厅';
+    gameBackBtn.title = gameReturnPage === 'mygames' ? '保存并返回对局列表' : '保存并返回大厅';
+  }
   stopReplayPlayback();
   R = null;
   if ($('replay')) $('replay').hidden = true;
@@ -2543,6 +2553,17 @@ function handleGameOver(status) {
 }
 
 let newGameFromPage = 'setup';
+let gameReturnPage = 'setup';
+
+function leaveGame() {
+  if (S && !S.over && !S.buffering && !cloudActive() && hasMeaningfulProgress(S)) {
+    if (!confirm('当前为游客试玩，返回将丢失本局进度（登录 Google 可自动保存）。确定返回吗？')) {
+      return;
+    }
+  }
+  if (gameReturnPage === 'mygames') showMyGames(true);
+  else showSetup();
+}
 
 async function showSetup() {
   stopReplayPlayback();
@@ -2641,6 +2662,9 @@ $('btn-fork-now').addEventListener('click', () => {
   forkSessionAt(S, t);
 });
 $('btn-newgame').addEventListener('click', () => showSetup());
+if ($('btn-game-back')) {
+  $('btn-game-back').addEventListener('click', () => leaveGame());
+}
 
 /* Multi-tab lock actions */
 $('btn-tab-back').addEventListener('click', () => showSetup());
@@ -3080,7 +3104,7 @@ async function openReplay(gameDoc, opts = {}) {
     : gameDoc.outcome === 'ascended' ? '🏆 飞升 · 已验真'
     : gameDoc.outcome === 'died' ? '💀 阵亡 · 已验真'
     : `✓ ${gameDoc.framesMatched} 帧已验真`;
-  $('btn-rep-back').textContent = fromPage === 'mygames' ? '← 返回我的对局' : '← 返回大厅';
+  $('btn-rep-back').textContent = fromPage === 'mygames' ? '← 返回对局' : '← 返回大厅';
   $('btn-rep-share').hidden = !gameDoc.publicRecordingPath;
   $('btn-rep-fork').disabled = true;
   $('rep-seek').value = '0';
@@ -3256,6 +3280,7 @@ function forkFromReplay() {
   const expectedHashes = sliced.map((t) => t.hash);
   const hdr = R.header;
   const parentId = R.game.gameId;
+  const fromPage = R.fromPage || 'setup';
 
   closeReplay(false);
   startGame({
@@ -3268,6 +3293,7 @@ function forkFromReplay() {
     replayBytes,
     expectedTurns: forkTurn,
     expectedHashes,
+    returnPage: fromPage,
   });
 }
 
