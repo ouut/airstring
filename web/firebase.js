@@ -63,14 +63,12 @@ try {
     const listeners = new Set();
     let indexCache = null;
     let indexCacheUid = null;
+    let indexOpChain = Promise.resolve();
 
-    async function readJsonObject(path) {
+    async function readTextObject(path) {
       try {
         const buf = await stMod.getBytes(stMod.ref(storage, path));
-        const text = new TextDecoder().decode(buf);
-        const parsed = JSON.parse(text);
-        if (parsed && parsed.deleted) return null;
-        return parsed;
+        return new TextDecoder().decode(buf);
       } catch (e) {
         const code = e && e.code ? String(e.code) : '';
         if (code === 'storage/object-not-found' || code === 'storage/unauthorized') {
@@ -78,6 +76,14 @@ try {
         }
         throw e;
       }
+    }
+
+    async function readJsonObject(path) {
+      const text = await readTextObject(path);
+      if (text == null) return null;
+      const parsed = JSON.parse(text);
+      if (parsed && parsed.deleted) return null;
+      return parsed;
     }
 
     async function writeJsonObject(path, obj) {
@@ -194,29 +200,63 @@ try {
         return readJsonObject('saves/' + user.uid + '/' + gameId + '.json');
       },
 
+      async loadOwnRecording(gameId) {
+        if (!user) return null;
+        return readTextObject('recordings/' + user.uid + '/' + gameId + '.jsonl');
+      },
+
+      async listMyGames(maxCount = 50) {
+        if (!user) return [];
+        const q = fsMod.query(
+          fsMod.collection(db, 'games'),
+          fsMod.where('uid', '==', user.uid),
+          fsMod.orderBy('createdAt', 'desc'),
+          fsMod.limit(maxCount),
+        );
+        const snap = await fsMod.getDocs(q);
+        const out = [];
+        snap.forEach((docSnap) => {
+          const d = docSnap.data() || {};
+          const created = d.createdAt && typeof d.createdAt.toDate === 'function'
+            ? d.createdAt.toDate().toISOString()
+            : (typeof d.createdAt === 'string' ? d.createdAt : '');
+          out.push({
+            id: docSnap.id,
+            ...d,
+            gameId: d.gameId || docSnap.id,
+            createdAt: created,
+          });
+        });
+        return out;
+      },
+
       async saveActiveGame(snapshot) {
         if (!user) throw new Error('not-signed-in');
         const uid = user.uid;
         await writeJsonObject('saves/' + uid + '/' + snapshot.gameId + '.json', snapshot);
-        const idx = await getActiveIndexInternal(false);
-        idx.games[snapshot.gameId] = {
-          gameId: snapshot.gameId,
-          seed: snapshot.seed,
-          seedSource: snapshot.seedSource,
-          options: snapshot.options,
-          playerName: snapshot.playerName || 'fleck',
-          roleEn: snapshot.roleEn || 'valkyrie',
-          turns: snapshot.turns || 0,
-          dlvl: snapshot.dlvl || 1,
-          hp: snapshot.hp != null ? snapshot.hp : null,
-          hpmax: snapshot.hpmax != null ? snapshot.hpmax : null,
-          startedAt: snapshot.startedAt || null,
-          updatedAt: snapshot.updatedAt || new Date().toISOString(),
-          sessionId: snapshot.sessionId || null,
-          parentGameId: snapshot.parentGameId || null,
-          forkTurn: snapshot.forkTurn != null ? snapshot.forkTurn : null,
-        };
-        await putActiveIndexInternal(idx);
+        indexOpChain = indexOpChain.then(async () => {
+          if (!user || user.uid !== uid) return;
+          const idx = await getActiveIndexInternal(true);
+          idx.games[snapshot.gameId] = {
+            gameId: snapshot.gameId,
+            seed: snapshot.seed,
+            seedSource: snapshot.seedSource,
+            options: snapshot.options,
+            playerName: snapshot.playerName || 'fleck',
+            roleEn: snapshot.roleEn || 'valkyrie',
+            turns: snapshot.turns || 0,
+            dlvl: snapshot.dlvl || 1,
+            hp: snapshot.hp != null ? snapshot.hp : null,
+            hpmax: snapshot.hpmax != null ? snapshot.hpmax : null,
+            startedAt: snapshot.startedAt || null,
+            updatedAt: snapshot.updatedAt || new Date().toISOString(),
+            sessionId: snapshot.sessionId || null,
+            parentGameId: snapshot.parentGameId || null,
+            forkTurn: snapshot.forkTurn != null ? snapshot.forkTurn : null,
+          };
+          await putActiveIndexInternal(idx);
+        });
+        await indexOpChain;
       },
 
       async deleteActiveGame(gameId) {
@@ -226,19 +266,21 @@ try {
         try {
           await stMod.deleteObject(objRef);
         } catch (e) {
-          /* Under S6 storage.rules where write requires request.resource.size,
-             deleteObject returns unauthorized; tombstone with 16-byte payload instead. */
           try {
             await writeJsonObject('saves/' + uid + '/' + gameId + '.json', { deleted: true });
           } catch (_) { /* best-effort */ }
         }
-        try {
-          const idx = await getActiveIndexInternal(false);
-          if (idx.games && idx.games[gameId]) {
-            delete idx.games[gameId];
-            await putActiveIndexInternal(idx);
-          }
-        } catch (_) { /* best-effort */ }
+        indexOpChain = indexOpChain.then(async () => {
+          if (!user || user.uid !== uid) return;
+          try {
+            const idx = await getActiveIndexInternal(true);
+            if (idx.games && idx.games[gameId]) {
+              delete idx.games[gameId];
+              await putActiveIndexInternal(idx);
+            }
+          } catch (_) { /* best-effort */ }
+        });
+        await indexOpChain;
       },
 
       /* canonical recording + the games index doc (pending) + auto-verify */

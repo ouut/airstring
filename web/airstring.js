@@ -143,6 +143,8 @@ function parseGameDoc(doc) {
   const opts = parseOptionMap(options);
   return {
     gameId,
+    uid: fsVal(f.uid) || null,
+    status: fsVal(f.status) || 'verified',
     seed: String(fsVal(f.seed) ?? '?'),
     seedSource: fsVal(f.seedSource) || 'given',
     options,
@@ -163,6 +165,36 @@ function parseGameDoc(doc) {
     tags: Array.isArray(fsVal(f.tags)) ? fsVal(f.tags) : [],
     parentGameId: fsVal(f.parentGameId) || null,
     forkTurn: fsVal(f.forkTurn),
+  };
+}
+
+function normalizePlainGame(d) {
+  const options = d.options || '';
+  const opts = parseOptionMap(options);
+  return {
+    gameId: d.gameId || d.id || '',
+    uid: d.uid || null,
+    status: d.status || 'pending',
+    seed: String(d.seed ?? '?'),
+    seedSource: d.seedSource || 'given',
+    options,
+    name: opts.name || 'fleck',
+    roleKey: opts.role || 'valkyrie',
+    turns: d.turns ?? 0,
+    frames: d.framesMatched ?? d.frames ?? 0,
+    framesCompared: d.framesCompared ?? d.frames ?? 0,
+    framesMatched: d.framesMatched ?? d.frames ?? 0,
+    createdAt: d.createdAt || '',
+    verifiedAt: d.verifiedAt || '',
+    recordingSha256: d.recordingSha256 || '',
+    publicRecordingPath: d.publicRecordingPath || null,
+    thumb: d.thumb || null,
+    maxDlvl: d.maxDlvl ?? null,
+    outcome: d.outcome || null,
+    deathReason: d.deathReason || null,
+    tags: Array.isArray(d.tags) ? d.tags : [],
+    parentGameId: d.parentGameId || null,
+    forkTurn: d.forkTurn != null ? d.forkTurn : null,
   };
 }
 
@@ -211,6 +243,127 @@ function renderAsciiThumb(thumbJson) {
   return pre;
 }
 
+function canWatchGame(g) {
+  if (!g) return false;
+  if (g.publicRecordingPath) return true;
+  const u = cloud && cloud.currentUser();
+  return !!(u && g.uid && g.uid === u.uid);
+}
+
+function buildGalleryCard(g, fromPage) {
+  const roleZh = (ROLES[g.roleKey] && ROLES[g.roleKey].zh) || g.roleKey;
+  const when = g.createdAt
+    ? new Date(g.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+    : '';
+  const watchable = canWatchGame(g);
+
+  const card = document.createElement('article');
+  card.className = 'vgame-card';
+
+  const thumbWrap = document.createElement('div');
+  thumbWrap.className = 'vgame-thumb-wrap';
+  const pre = g.thumb ? renderAsciiThumb(g.thumb) : null;
+  if (pre) {
+    thumbWrap.appendChild(pre);
+  } else {
+    const ph = document.createElement('div');
+    ph.className = 'ascii-thumb-placeholder';
+    ph.textContent = `@  #${g.seed}\n${g.name} · ${roleZh}\n` +
+      (watchable ? '点击播放本地 WASM 回放' : '（历史局无公开录像）');
+    thumbWrap.appendChild(ph);
+  }
+
+  const outPill = document.createElement('span');
+  outPill.className = 'thumb-pill-tl' +
+    (g.outcome === 'ascended' ? ' ascended' : g.outcome === 'died' ? ' died' : '');
+  outPill.textContent = g.status === 'pending' ? '⏳ 待验真'
+    : g.status === 'rejected' ? '✗ 未通过'
+    : g.outcome === 'ascended' ? '🏆 飞升'
+    : g.outcome === 'died' ? '💀 阵亡'
+    : g.parentGameId ? '⚡ 分叉局' : '✓ 已验真';
+  thumbWrap.appendChild(outPill);
+
+  const framePill = document.createElement('span');
+  framePill.className = 'thumb-pill-tr';
+  framePill.textContent = g.status === 'verified' ? `✓ ${g.framesMatched} 帧` : `${g.frames} 帧`;
+  thumbWrap.appendChild(framePill);
+
+  const statPill = document.createElement('span');
+  statPill.className = 'thumb-pill-br';
+  statPill.textContent = (g.maxDlvl ? `Dlvl:${g.maxDlvl} · ` : '') + `T:${g.turns}`;
+  thumbWrap.appendChild(statPill);
+
+  if (watchable) {
+    thumbWrap.title = '点击观看录像与分叉';
+    thumbWrap.addEventListener('click', () => openReplay(g, { fromPage }));
+  }
+
+  const body = document.createElement('div');
+  body.className = 'vgame-body';
+
+  const top = document.createElement('div');
+  top.className = 'vgame-top';
+  const title = document.createElement('span');
+  title.textContent = `${g.name} · ${roleZh} · #${g.seed}`;
+  top.appendChild(title);
+  if (g.parentGameId) {
+    const fb = document.createElement('span');
+    fb.className = 'ag-badge fork';
+    fb.textContent = `⚡ T${g.forkTurn ?? 0}`;
+    top.appendChild(fb);
+  }
+
+  const meta = document.createElement('div');
+  meta.className = 'vgame-meta';
+  const m1 = document.createElement('span');
+  m1.textContent = g.gameId;
+  const m2 = document.createElement('span');
+  m2.textContent = when;
+  meta.append(m1, m2);
+
+  body.append(top, meta);
+  if (g.deathReason) {
+    const rs = document.createElement('div');
+    rs.className = 'vgame-reason';
+    rs.textContent = g.deathReason;
+    rs.title = g.deathReason;
+    body.appendChild(rs);
+  }
+
+  const foot = document.createElement('div');
+  foot.className = 'vgame-foot';
+
+  if (watchable) {
+    const playBtn = document.createElement('button');
+    playBtn.type = 'button';
+    playBtn.className = 'mini-btn play-btn';
+    playBtn.textContent = '▶ 回放 / 分叉';
+    playBtn.addEventListener('click', () => openReplay(g, { fromPage }));
+    foot.appendChild(playBtn);
+  }
+
+  const sameBtn = document.createElement('button');
+  sameBtn.type = 'button';
+  sameBtn.className = 'mini-btn';
+  sameBtn.textContent = '同种子开局';
+  sameBtn.addEventListener('click', () => {
+    showSetup();
+    const givenRadio = document.querySelector('input[name="seedmode"][value="given"]');
+    if (givenRadio) givenRadio.checked = true;
+    if (/^\d+$/.test(String(g.seed))) $('seed-input').value = String(g.seed);
+    if (ROLES[g.roleKey]) {
+      $('opt-role').value = g.roleKey;
+      $('opt-role').dispatchEvent(new Event('change'));
+    }
+    $('start-btn').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+  foot.appendChild(sameBtn);
+
+  body.appendChild(foot);
+  card.append(thumbWrap, body);
+  return card;
+}
+
 let verifiedGamesCache = [];
 let lobbyFilter = 'all';
 
@@ -238,113 +391,7 @@ function renderVerifiedGallery() {
 
   box.innerHTML = '';
   for (const g of list) {
-    const roleZh = (ROLES[g.roleKey] && ROLES[g.roleKey].zh) || g.roleKey;
-    const when = g.createdAt
-      ? new Date(g.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
-      : '';
-
-    const card = document.createElement('article');
-    card.className = 'vgame-card';
-
-    /* Top pure-black ASCII thumbnail preview */
-    const thumbWrap = document.createElement('div');
-    thumbWrap.className = 'vgame-thumb-wrap';
-    const pre = g.thumb ? renderAsciiThumb(g.thumb) : null;
-    if (pre) {
-      thumbWrap.appendChild(pre);
-    } else {
-      const ph = document.createElement('div');
-      ph.className = 'ascii-thumb-placeholder';
-      ph.textContent = `@  #${g.seed}\n${g.name} · ${roleZh}\n（历史局无缩略图）`;
-      thumbWrap.appendChild(ph);
-    }
-
-    const outPill = document.createElement('span');
-    outPill.className = 'thumb-pill-tl' +
-      (g.outcome === 'ascended' ? ' ascended' : g.outcome === 'died' ? ' died' : '');
-    outPill.textContent = g.outcome === 'ascended' ? '🏆 飞升'
-      : g.outcome === 'died' ? '💀 阵亡'
-      : g.parentGameId ? '⚡ 分叉局' : '✓ 已验真';
-    thumbWrap.appendChild(outPill);
-
-    const framePill = document.createElement('span');
-    framePill.className = 'thumb-pill-tr';
-    framePill.textContent = `✓ ${g.framesMatched} 帧`;
-    thumbWrap.appendChild(framePill);
-
-    const statPill = document.createElement('span');
-    statPill.className = 'thumb-pill-br';
-    statPill.textContent = (g.maxDlvl ? `Dlvl:${g.maxDlvl} · ` : '') + `T:${g.turns}`;
-    thumbWrap.appendChild(statPill);
-
-    if (g.publicRecordingPath) {
-      thumbWrap.title = '点击观看录像与分叉';
-      thumbWrap.addEventListener('click', () => openReplay(g));
-    }
-
-    const body = document.createElement('div');
-    body.className = 'vgame-body';
-
-    const top = document.createElement('div');
-    top.className = 'vgame-top';
-    const title = document.createElement('span');
-    title.textContent = `${g.name} · ${roleZh} · #${g.seed}`;
-    top.appendChild(title);
-    if (g.parentGameId) {
-      const fb = document.createElement('span');
-      fb.className = 'ag-badge fork';
-      fb.textContent = `⚡ T${g.forkTurn ?? 0}`;
-      top.appendChild(fb);
-    }
-
-    const meta = document.createElement('div');
-    meta.className = 'vgame-meta';
-    const m1 = document.createElement('span');
-    m1.textContent = g.gameId;
-    const m2 = document.createElement('span');
-    m2.textContent = when;
-    meta.append(m1, m2);
-
-    body.append(top, meta);
-    if (g.deathReason) {
-      const rs = document.createElement('div');
-      rs.className = 'vgame-reason';
-      rs.textContent = g.deathReason;
-      rs.title = g.deathReason;
-      body.appendChild(rs);
-    }
-
-    const foot = document.createElement('div');
-    foot.className = 'vgame-foot';
-
-    if (g.publicRecordingPath) {
-      const playBtn = document.createElement('button');
-      playBtn.type = 'button';
-      playBtn.className = 'mini-btn play-btn';
-      playBtn.textContent = '▶ 回放 / 分叉';
-      playBtn.addEventListener('click', () => openReplay(g));
-      foot.appendChild(playBtn);
-    }
-
-    const sameBtn = document.createElement('button');
-    sameBtn.type = 'button';
-    sameBtn.className = 'mini-btn';
-    sameBtn.textContent = '同种子开局';
-    sameBtn.addEventListener('click', () => {
-      const givenRadio = document.querySelector('input[name="seedmode"][value="given"]');
-      if (givenRadio) givenRadio.checked = true;
-      if (/^\d+$/.test(String(g.seed))) $('seed-input').value = String(g.seed);
-      if (ROLES[g.roleKey]) {
-        $('opt-role').value = g.roleKey;
-        $('opt-role').dispatchEvent(new Event('change'));
-      }
-      $('start-btn').scrollIntoView({ behavior: 'smooth', block: 'center' });
-    });
-    foot.appendChild(sameBtn);
-
-    body.appendChild(foot);
-    card.append(thumbWrap, body);
-    box.appendChild(card);
+    box.appendChild(buildGalleryCard(g, 'setup'));
   }
 }
 
@@ -1735,8 +1782,24 @@ function finishBuffering(sid) {
   }
 }
 
-/* ---------------- setup active games list & auth sync ---------------- */
-function renderActiveGameCard(item, uid) {
+/* ---------------- setup active games list, My Games page & auth sync ---------------- */
+function setTopNavActive(which) {
+  if ($('nav-lobby')) $('nav-lobby').classList.toggle('active', which === 'setup');
+  if ($('nav-mygames')) $('nav-mygames').classList.toggle('active', which === 'mygames');
+}
+
+function updateMyCountBadge(count) {
+  const b = $('nav-my-count');
+  if (!b) return;
+  if (count > 0) {
+    b.textContent = String(count);
+    b.hidden = false;
+  } else {
+    b.hidden = true;
+  }
+}
+
+function renderActiveGameCard(item, uid, fromPage = 'setup') {
   const card = document.createElement('div');
   card.className = 'active-game-item';
   const roleZh = (ROLES[item.roleEn] && ROLES[item.roleEn].zh) || item.roleEn || '冒险者';
@@ -1757,10 +1820,11 @@ function renderActiveGameCard(item, uid) {
   const hpStr = (item.hp != null && item.hpmax != null) ? `HP ${item.hp}/${item.hpmax}` : '';
   const dlvlStr = item.dlvl ? `Dlvl:${item.dlvl}` : '';
   const seedStr = item.seedSource === 'random' ? '种子:随机' : `种子:#${item.seed}`;
+  const forkStr = item.parentGameId ? `源:${item.parentGameId}(T${item.forkTurn ?? 0})` : '';
   const when = item.updatedAt
     ? new Date(item.updatedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
     : '';
-  meta.textContent = [dlvlStr, hpStr, seedStr, when].filter(Boolean).join(' · ');
+  meta.textContent = [dlvlStr, hpStr, seedStr, forkStr, when].filter(Boolean).join(' · ');
 
   const acts = document.createElement('div');
   acts.className = 'ag-actions';
@@ -1771,9 +1835,14 @@ function renderActiveGameCard(item, uid) {
   bResume.textContent = '继续游玩';
   bResume.addEventListener('click', () => resumeActiveGameById(uid, item.gameId, false));
 
+  const bWatch = document.createElement('button');
+  bWatch.type = 'button';
+  bWatch.textContent = '▶ 回放 / 选回合分叉';
+  bWatch.addEventListener('click', () => watchActiveGameById(uid, item.gameId, fromPage));
+
   const bFork = document.createElement('button');
   bFork.type = 'button';
-  bFork.textContent = '分叉';
+  bFork.textContent = '⚡ 末尾分叉';
   bFork.addEventListener('click', () => resumeActiveGameById(uid, item.gameId, true));
 
   const bDel = document.createElement('button');
@@ -1784,40 +1853,24 @@ function renderActiveGameCard(item, uid) {
     if (!confirm(`确定放弃「${item.playerName || 'fleck'} · ${roleZh}（第 ${item.turns || 0} 回合）」？放弃后将从进行中列表移除。`)) return;
     await idbDeleteGame(uid, item.gameId);
     try { await cloud.deleteActiveGame(item.gameId); } catch (e) { }
-    refreshActiveGames(true);
+    await refreshActiveGames(true);
+    if ($('mygames') && !$('mygames').hidden) refreshMyGamesPage(false);
   });
 
-  acts.append(bResume, bFork, bDel);
+  acts.append(bResume, bWatch, bFork, bDel);
   card.append(top, meta, acts);
   return card;
 }
 
-async function refreshActiveGames(forceCloud = false) {
-  const guestBanner = $('guest-banner');
-  const activeCard = $('active-games-card');
-  const listEl = $('active-games-list');
-  const shelvedWrap = $('shelved-games-wrap');
-  const shelvedList = $('shelved-games-list');
-  const shelvedSum = $('shelved-games-summary');
-  const syncHint = $('active-sync-hint');
+let cachedActiveAll = [];
 
-  const user = cloud && cloud.currentUser();
-  if (!user) {
-    if (guestBanner) guestBanner.hidden = false;
-    if (activeCard) activeCard.hidden = true;
-    return;
-  }
-  if (guestBanner) guestBanner.hidden = true;
-  if (!activeCard || !listEl) return;
-
-  if (syncHint) syncHint.textContent = '同步中…';
-  const uid = user.uid;
+async function fetchMergedActiveGames(uid, forceCloud) {
   const merged = new Map();
-
   const localList = await idbListGames(uid);
   for (const g of localList) {
     if (g && g.gameId) merged.set(g.gameId, { ...g, _source: 'local' });
   }
+  let cloudErr = false;
   try {
     const idx = await cloud.loadActiveIndex(forceCloud);
     for (const [gid, meta] of Object.entries((idx && idx.games) || {})) {
@@ -1828,22 +1881,19 @@ async function refreshActiveGames(forceCloud = false) {
         merged.set(gid, { ...meta, _source: 'cloud' });
       }
     }
-    if (syncHint) syncHint.textContent = '';
   } catch (e) {
-    if (syncHint) syncHint.textContent = '云端暂不可达，已显示本机缓存';
+    cloudErr = true;
   }
-
   const all = Array.from(merged.values()).sort((a, b) =>
     String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
-  if (!all.length) {
-    activeCard.hidden = true;
-    return;
-  }
+  cachedActiveAll = all;
+  return { all, cloudErr };
+}
 
-  activeCard.hidden = false;
+function renderActiveListInto(all, uid, listEl, shelvedWrap, shelvedList, shelvedSum, fromPage) {
+  if (!listEl) return;
   listEl.innerHTML = '';
   if (shelvedList) shelvedList.innerHTML = '';
-
   const now = Date.now();
   const recent = [];
   const shelved = [];
@@ -1852,16 +1902,153 @@ async function refreshActiveGames(forceCloud = false) {
     if (now - ts > SHELVE_AGE_MS) shelved.push(item);
     else recent.push(item);
   }
-
-  for (const item of recent) listEl.appendChild(renderActiveGameCard(item, uid));
   if (!recent.length) {
-    listEl.innerHTML = '<div class="hint">近期无进行中对局，下方可展开 30 天前已搁置的对局。</div>';
+    listEl.innerHTML = '<div class="hint">' +
+      (shelved.length ? '近期无进行中对局，下方可展开 30 天前已搁置的对局。' : '暂无进行中对局，开一局试试！') +
+      '</div>';
+  } else {
+    for (const item of recent) listEl.appendChild(renderActiveGameCard(item, uid, fromPage));
   }
   if (shelvedWrap && shelvedList && shelvedSum) {
     shelvedWrap.hidden = shelved.length === 0;
     shelvedSum.textContent = `已搁置对局（${shelved.length} 局 · 超过 30 天未操作，随时可续打或分叉）`;
-    for (const item of shelved) shelvedList.appendChild(renderActiveGameCard(item, uid));
+    for (const item of shelved) shelvedList.appendChild(renderActiveGameCard(item, uid, fromPage));
   }
+}
+
+async function refreshActiveGames(forceCloud = false) {
+  const guestBanner = $('guest-banner');
+  const activeCard = $('active-games-card');
+  const syncHint = $('active-sync-hint');
+
+  const user = cloud && cloud.currentUser();
+  if (!user) {
+    cachedActiveAll = [];
+    updateMyCountBadge(0);
+    if (guestBanner) guestBanner.hidden = false;
+    if (activeCard) activeCard.hidden = true;
+    return [];
+  }
+  if (guestBanner) guestBanner.hidden = true;
+  if (syncHint) syncHint.textContent = '同步中…';
+
+  const uid = user.uid;
+  const { all, cloudErr } = await fetchMergedActiveGames(uid, forceCloud);
+  updateMyCountBadge(all.length);
+  if (syncHint) syncHint.textContent = cloudErr ? '云端暂不可达，已显示本机缓存' : '';
+
+  if (activeCard) {
+    activeCard.hidden = all.length === 0;
+    if (all.length) {
+      renderActiveListInto(
+        all, uid,
+        $('active-games-list'), $('shelved-games-wrap'),
+        $('shelved-games-list'), $('shelved-games-summary'), 'setup',
+      );
+    }
+  }
+  return all;
+}
+
+async function refreshMyGamesPage(forceCloud = true) {
+  const guestBox = $('mygames-guest');
+  const contentBox = $('mygames-content');
+  const user = cloud && cloud.currentUser();
+  if (!user) {
+    if (guestBox) guestBox.hidden = false;
+    if (contentBox) contentBox.hidden = true;
+    return;
+  }
+  if (guestBox) guestBox.hidden = true;
+  if (contentBox) contentBox.hidden = false;
+
+  const uid = user.uid;
+  const allActive = await refreshActiveGames(forceCloud);
+  if ($('my-active-count')) $('my-active-count').textContent = `共 ${allActive.length} 局`;
+  renderActiveListInto(
+    allActive, uid,
+    $('my-active-list'), $('my-shelved-wrap'),
+    $('my-shelved-list'), $('my-shelved-summary'), 'mygames',
+  );
+
+  const finBox = $('my-finished-list');
+  const finCount = $('my-finished-count');
+  if (finBox) finBox.innerHTML = '<div class="hint">加载我的已结束对局…</div>';
+  try {
+    const raw = await cloud.listMyGames(50);
+    const games = raw.map(normalizePlainGame);
+    if (finCount) finCount.textContent = `共 ${games.length} 局`;
+    if (!games.length) {
+      if (finBox) finBox.innerHTML = '<div class="hint">暂无已结束对局。完成一局（通关/死亡/#quit）后会自动出现在这里，支持回放与分叉。</div>';
+      return;
+    }
+    if (finBox) {
+      finBox.innerHTML = '';
+      for (const g of games) finBox.appendChild(buildGalleryCard(g, 'mygames'));
+    }
+  } catch (e) {
+    if (finBox) finBox.innerHTML = '<div class="hint">暂时无法拉取已结束对局：' + (e && e.message ? e.message : e) + '</div>';
+  }
+}
+
+async function showMyGames(forceCloud = true) {
+  if (S && !S.over && !S.buffering && !S.tabLocked && cloudActive()) {
+    saveLocalSnapshot();
+    await Promise.race([syncActiveToCloud(true), new Promise((r) => setTimeout(r, 2000))]);
+  }
+  try { sessionStorage.removeItem('airstring_last_active_game'); } catch (e) { }
+  stopReplayPlayback();
+  R = null;
+  teardownCurrentSession();
+  S = null;
+  if (document.fullscreenElement && document.exitFullscreen) {
+    document.exitFullscreen().catch(() => { });
+  }
+  document.body.classList.remove('in-game');
+  toggleGameDrawer(false);
+  toggleMsgLog(false);
+  $('buffer-overlay').hidden = true;
+  $('tab-lock-overlay').hidden = true;
+  $('game').hidden = true;
+  $('setup').hidden = true;
+  if ($('replay')) $('replay').hidden = true;
+  if ($('mygames')) $('mygames').hidden = false;
+  setTopNavActive('mygames');
+  try { history.replaceState(null, '', '#mygames'); } catch (e) { }
+  await refreshMyGamesPage(forceCloud);
+}
+
+async function watchActiveGameById(uid, gameId, fromPage = 'mygames') {
+  const snap = await loadBestSnapshot(uid, gameId);
+  if (!snap) {
+    alert('未找到该对局记录，可能已被清理。');
+    refreshMyGamesPage(true);
+    return;
+  }
+  const opts = parseOptionMap(snap.options || '');
+  const gameDoc = {
+    gameId: snap.gameId,
+    uid,
+    status: 'playing',
+    seed: String(snap.seed ?? '?'),
+    seedSource: snap.seedSource || 'given',
+    options: snap.options || '',
+    name: snap.playerName || opts.name || 'fleck',
+    roleKey: snap.roleEn || opts.role || 'valkyrie',
+    turns: snap.turns || 0,
+    frames: snap.turns || 0,
+    framesCompared: snap.turns || 0,
+    framesMatched: snap.turns || 0,
+    createdAt: snap.startedAt || '',
+    recordingSha256: '',
+    publicRecordingPath: null,
+    maxDlvl: snap.dlvl || 1,
+    outcome: null,
+    deathReason: '进行中对局',
+    parentGameId: snap.parentGameId || null,
+    forkTurn: snap.forkTurn != null ? snap.forkTurn : null,
+  };
+  openReplay(gameDoc, { snapshot: snap, fromPage });
 }
 
 async function loadBestSnapshot(uid, gameId) {
@@ -1926,6 +2113,11 @@ async function resumeActiveGameById(uid, gameId, asFork) {
 
 async function forkSessionAt(sess, targetTurn) {
   if (!sess) return;
+  /* Persist the parent active game BEFORE tearing it down to launch the fork! */
+  if (!sess.over && !sess.buffering && !sess.tabLocked && cloudActive() && hasMeaningfulProgress(sess)) {
+    saveLocalSnapshot();
+    await Promise.race([syncActiveToCloud(true), new Promise((r) => setTimeout(r, 2500))]);
+  }
   const allTurns = (sess.records || []).filter((r) => r && r.k === 'turn');
   const sliced = targetTurn != null
     ? allTurns.filter((t) => (t.turn || 0) <= targetTurn)
@@ -1947,15 +2139,15 @@ async function forkSessionAt(sess, targetTurn) {
 }
 
 async function onAuthChanged(user) {
-  /* Update setup screen guest banner & active list */
-  if ($('setup') && !$('setup').hidden) {
-    await refreshActiveGames(true);
+  await refreshActiveGames(true);
+  if (verifiedGamesCache.length) renderVerifiedGallery();
+  if ($('mygames') && !$('mygames').hidden) {
+    await refreshMyGamesPage(true);
   }
   /* Update drawer if currently in game */
   if (S) {
     updateDrawerSyncBanner();
     if (user && !S.over && !S.buffering && !S.tabLocked) {
-      /* Mid-game guest login claim: seamlessly bind current run to signed-in user */
       if (hasMeaningfulProgress(S)) {
         saveLocalSnapshot();
         S.dirtyCloud = true;
@@ -1968,7 +2160,7 @@ async function onAuthChanged(user) {
     return;
   }
   /* Auto-resume exact game on browser F5 refresh for signed-in user */
-  if (user && !autoResumeAttempted) {
+  if (user && !autoResumeAttempted && !location.hash.startsWith('#replay/') && location.hash !== '#mygames') {
     autoResumeAttempted = true;
     let lastId = null;
     try { lastId = sessionStorage.getItem('airstring_last_active_game'); } catch (e) { }
@@ -2087,6 +2279,10 @@ async function startGame(plan) {
   stopReplayPlayback();
   R = null;
   if ($('replay')) $('replay').hidden = true;
+  if ($('mygames')) $('mygames').hidden = true;
+  if (location.hash === '#mygames' || location.hash.startsWith('#replay/')) {
+    try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { }
+  }
   document.body.classList.add('in-game');
   $('setup').hidden = true;
   $('game').hidden = false;
@@ -2219,12 +2415,13 @@ async function showSetup() {
   stopReplayPlayback();
   R = null;
   if ($('replay')) $('replay').hidden = true;
-  if (location.hash && location.hash.startsWith('#replay/')) {
+  if ($('mygames')) $('mygames').hidden = true;
+  if (location.hash && (location.hash.startsWith('#replay/') || location.hash === '#mygames')) {
     try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { }
   }
   if (S && !S.over && !S.buffering && !S.tabLocked && cloudActive()) {
     saveLocalSnapshot();
-    syncActiveToCloud(true);
+    await Promise.race([syncActiveToCloud(true), new Promise((r) => setTimeout(r, 2000))]);
   }
   try { sessionStorage.removeItem('airstring_last_active_game'); } catch (e) { }
   teardownCurrentSession();
@@ -2238,8 +2435,9 @@ async function showSetup() {
   $('tab-lock-overlay').hidden = true;
   $('game').hidden = true;
   $('setup').hidden = false;
+  setTopNavActive('setup');
   S = null;
-  refreshActiveGames(false);
+  refreshActiveGames(true);
   loadVerifiedLobby();
 }
 
@@ -2364,7 +2562,8 @@ function stopReplayPlayback() {
   if (btn) btn.textContent = '▶ 播放';
 }
 
-function closeReplay(goSetup = true) {
+function closeReplay(goBack = true) {
+  const fromPage = (R && R.fromPage) || 'setup';
   stopReplayPlayback();
   if (R) {
     teardownCurrentSession();
@@ -2374,12 +2573,18 @@ function closeReplay(goSetup = true) {
   if (location.hash && location.hash.startsWith('#replay/')) {
     try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { }
   }
-  if (goSetup) {
-    $('game').hidden = true;
-    $('setup').hidden = false;
-    document.body.classList.remove('in-game');
-    refreshActiveGames(false);
-    loadVerifiedLobby();
+  if (goBack) {
+    if (fromPage === 'mygames') {
+      showMyGames(false);
+    } else {
+      $('game').hidden = true;
+      if ($('mygames')) $('mygames').hidden = true;
+      $('setup').hidden = false;
+      setTopNavActive('setup');
+      document.body.classList.remove('in-game');
+      refreshActiveGames(false);
+      loadVerifiedLobby();
+    }
   }
 }
 
@@ -2642,16 +2847,18 @@ async function openReplayById(gameId) {
     alert('未找到该公开已验真对局：' + gameId);
     return;
   }
-  if (!g.publicRecordingPath) {
+  if (!canWatchGame(g)) {
     alert('该历史对局尚未生成公开录像文件。');
     return;
   }
-  openReplay(g);
+  openReplay(g, { fromPage: 'setup' });
 }
 
-async function openReplay(gameDoc) {
-  if (!gameDoc || !gameDoc.publicRecordingPath) {
-    alert('该对局暂无公开录像。');
+async function openReplay(gameDoc, opts = {}) {
+  const snapshot = opts && opts.snapshot ? opts.snapshot : null;
+  const fromPage = (opts && opts.fromPage) || 'setup';
+  if (!gameDoc || (!snapshot && !canWatchGame(gameDoc))) {
+    alert('该对局暂无可读取的录像文件。');
     return;
   }
   stopReplayPlayback();
@@ -2662,13 +2869,22 @@ async function openReplay(gameDoc) {
   document.body.classList.remove('in-game');
   $('setup').hidden = true;
   $('game').hidden = true;
+  if ($('mygames')) $('mygames').hidden = true;
   $('replay').hidden = false;
-  try { history.replaceState(null, '', '#replay/' + encodeURIComponent(gameDoc.gameId)); } catch (e) { }
+  setTopNavActive('');
+  if (!snapshot) {
+    try { history.replaceState(null, '', '#replay/' + encodeURIComponent(gameDoc.gameId)); } catch (e) { }
+  }
 
   const roleZh = (ROLES[gameDoc.roleKey] && ROLES[gameDoc.roleKey].zh) || gameDoc.roleKey;
   $('rep-title').textContent = `${gameDoc.name} · ${roleZh} · 种子 #${gameDoc.seed}`;
-  $('rep-badge').textContent = gameDoc.outcome === 'ascended' ? '🏆 飞升 · 已验真'
-    : gameDoc.outcome === 'died' ? '💀 阵亡 · 已验真' : `✓ ${gameDoc.framesMatched} 帧已验真`;
+  $('rep-badge').textContent = snapshot ? `进行中 · T${gameDoc.turns}`
+    : gameDoc.status === 'pending' ? '⏳ 待验真（本人录像）'
+    : gameDoc.outcome === 'ascended' ? '🏆 飞升 · 已验真'
+    : gameDoc.outcome === 'died' ? '💀 阵亡 · 已验真'
+    : `✓ ${gameDoc.framesMatched} 帧已验真`;
+  $('btn-rep-back').textContent = fromPage === 'mygames' ? '← 返回我的对局' : '← 返回大厅';
+  $('btn-rep-share').hidden = !gameDoc.publicRecordingPath;
   $('btn-rep-fork').disabled = true;
   $('rep-seek').value = '0';
   $('rep-seek').max = '0';
@@ -2676,13 +2892,14 @@ async function openReplay(gameDoc) {
   $('rep-buffer-overlay').hidden = false;
   $('rep-buffer-title').textContent = '正在缓冲回放帧…';
   $('rep-buffer-fill').style.width = '5%';
-  $('rep-buffer-detail').textContent = '正在下载公开录像…';
+  $('rep-buffer-detail').textContent = snapshot ? '正在加载进行中进度…' : '正在下载录像流…';
 
   renderReplayPassport(gameDoc);
   loadForkTree(gameDoc.gameId);
 
   R = {
     sid,
+    fromPage,
     game: gameDoc,
     header: null,
     turns: [],
@@ -2697,24 +2914,35 @@ async function openReplay(gameDoc) {
   };
 
   try {
-    const cfg = globalThis.AIRSTRING_FIREBASE_CONFIG || {};
-    const bucket = cfg.storageBucket || ((cfg.projectId || 'airstring-nethack') + '.firebasestorage.app');
-    const dlUrl = 'https://firebasestorage.googleapis.com/v0/b/' +
-      encodeURIComponent(bucket) + '/o/' +
-      encodeURIComponent(gameDoc.publicRecordingPath) + '?alt=media';
-    const resp = await fetch(dlUrl);
-    if (!resp.ok) throw new Error('下载录像失败 HTTP ' + resp.status);
-    const text = await resp.text();
-    if (!R || R.sid !== sid) return;
+    let records = [];
+    if (snapshot) {
+      records = Array.isArray(snapshot.records) ? snapshot.records : [];
+    } else {
+      let text = null;
+      if (gameDoc.publicRecordingPath) {
+        const cfg = globalThis.AIRSTRING_FIREBASE_CONFIG || {};
+        const bucket = cfg.storageBucket || ((cfg.projectId || 'airstring-nethack') + '.firebasestorage.app');
+        const dlUrl = 'https://firebasestorage.googleapis.com/v0/b/' +
+          encodeURIComponent(bucket) + '/o/' +
+          encodeURIComponent(gameDoc.publicRecordingPath) + '?alt=media';
+        const resp = await fetch(dlUrl);
+        if (resp.ok) text = await resp.text();
+      }
+      if (text == null && cloudActive() && cloud.loadOwnRecording) {
+        text = await cloud.loadOwnRecording(gameDoc.gameId);
+      }
+      if (!text) throw new Error('未能读取到录像流（请检查网络或确认登录账号）');
+      if (!R || R.sid !== sid) return;
+      const lines = text.split('\n').filter((l) => l.trim());
+      records = lines.map((l) => JSON.parse(l));
+    }
 
-    const lines = text.split('\n').filter((l) => l.trim());
-    const records = lines.map((l) => JSON.parse(l));
-    const header = records.find((r) => r.k === 'header');
-    const turns = records.filter((r) => r.k === 'turn');
-    if (!header || !turns.length) throw new Error('录像格式异常');
+    const header = records.find((r) => r && r.k === 'header');
+    const turns = records.filter((r) => r && r.k === 'turn');
+    if (!header || !turns.length) throw new Error('录像无有效回合记录');
     R.header = header;
     R.turns = turns;
-    const replayBytes = concatReplayBytes(records, null);
+    const replayBytes = concatReplayBytes(records, snapshot ? snapshot.pendingKeys : null);
 
     $('rep-buffer-detail').textContent = `引擎重放缓存中：0 / ${turns.length} 回合`;
 
@@ -2728,7 +2956,7 @@ async function openReplay(gameDoc) {
         try { globalThis.__airstring_close_keys(); } catch (e) { }
       }
       if (R.frames.length) {
-        renderReplayFrame(0);
+        renderReplayFrame(snapshot ? R.frames.length - 1 : 0);
       } else {
         $('rep-time').textContent = '无可显示帧';
       }
@@ -2844,6 +3072,20 @@ function forkFromReplay() {
   });
 }
 
+/* Top nav & My Games page wiring */
+$('nav-lobby').addEventListener('click', () => showSetup());
+$('nav-mygames').addEventListener('click', () => showMyGames(true));
+$('btn-goto-mygames').addEventListener('click', () => showMyGames(true));
+$('btn-mygames-refresh').addEventListener('click', () => refreshMyGamesPage(true));
+$('btn-mygames-new').addEventListener('click', () => showSetup());
+$('btn-mygames-signin').addEventListener('click', () => {
+  if (cloud && cloud.signIn) {
+    cloud.signIn().catch((e) => {
+      alert('Google 登录未完成：' + (e && e.message ? e.message : '请检查弹窗拦截'));
+    });
+  }
+});
+
 /* Replay controls wiring */
 $('btn-rep-back').addEventListener('click', () => closeReplay(true));
 $('btn-rep-share').addEventListener('click', () => {
@@ -2859,8 +3101,10 @@ $('btn-rep-share').addEventListener('click', () => {
   }
 });
 $('btn-rep-start').addEventListener('click', () => { stopReplayPlayback(); renderReplayFrame(0); });
+$('btn-rep-rew').addEventListener('click', () => { stopReplayPlayback(); if (R) renderReplayFrame(R.curIdx - 5); });
 $('btn-rep-prev').addEventListener('click', () => { stopReplayPlayback(); if (R) renderReplayFrame(R.curIdx - 1); });
 $('btn-rep-next').addEventListener('click', () => { stopReplayPlayback(); if (R) renderReplayFrame(R.curIdx + 1); });
+$('btn-rep-fwd').addEventListener('click', () => { stopReplayPlayback(); if (R) renderReplayFrame(R.curIdx + 5); });
 $('btn-rep-play').addEventListener('click', () => {
   if (!R || R.buffering) return;
   if (R.playing) stopReplayPlayback();
@@ -2885,11 +3129,11 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === 'ArrowLeft') {
     e.preventDefault();
     stopReplayPlayback();
-    renderReplayFrame(R.curIdx - 1);
+    renderReplayFrame(R.curIdx - (e.shiftKey ? 5 : 1));
   } else if (e.key === 'ArrowRight') {
     e.preventDefault();
     stopReplayPlayback();
-    renderReplayFrame(R.curIdx + 1);
+    renderReplayFrame(R.curIdx + (e.shiftKey ? 5 : 1));
   } else if (e.key === 'Escape') {
     closeReplay(true);
   }
@@ -2900,15 +3144,20 @@ window.addEventListener('resize', () => {
   }
 });
 
-/* Deep link: #replay/<gameId> */
-function checkReplayHash() {
-  const m = /^#replay\/(.+)$/.exec(location.hash || '');
+/* Deep links: #replay/<gameId> and #mygames */
+function checkRouteHash() {
+  const h = location.hash || '';
+  const m = /^#replay\/(.+)$/.exec(h);
   if (m) {
     const gid = decodeURIComponent(m[1]);
     if (!R || R.game.gameId !== gid) openReplayById(gid);
+    return;
+  }
+  if (h === '#mygames') {
+    if ($('mygames') && $('mygames').hidden) showMyGames(true);
   }
 }
-window.addEventListener('hashchange', checkReplayHash);
+window.addEventListener('hashchange', checkRouteHash);
 
 /* after a tap, drop focus from the button so a following Space /
    Enter keypress is a game key, not a second button activation */
@@ -2925,7 +3174,7 @@ if (cloud && cloud.onUserChange) {
 } else {
   if ($('guest-banner')) $('guest-banner').hidden = false;
 }
-checkReplayHash();
+checkRouteHash();
 
 /* read-only test/inspection hook (used by the S5 gate driver) */
 window.__airstring_debug = {

@@ -18,6 +18,10 @@
     <span class="logo">airstring</span>
     <span class="tag">NetHack 3.6.7 · 种子对局 · 可验真</span>
   </div>
+  <nav id="top-nav" aria-label="主导航">
+    <button id="nav-lobby" type="button" class="nav-tab active">大厅 / 开局</button>
+    <button id="nav-mygames" type="button" class="nav-tab">我的对局 <span id="nav-my-count" class="nav-badge" hidden>0</span></button>
+  </nav>
   <span id="auth-box"></span>
 </header>
 
@@ -31,12 +35,13 @@
     <button id="btn-guest-signin" type="button" class="mini-btn primary-mini">Google 登录</button>
   </div>
 
-  <!-- Signed-in user's in-progress games (multi-game, zero upload/download) -->
+  <!-- Signed-in user's in-progress games quick card -->
   <section id="active-games-card" class="active-games-card" hidden>
     <div class="lobby-head">
       <h2>我的进行中对局</h2>
       <div class="active-head-actions">
         <span id="active-sync-hint" class="hint"></span>
+        <button id="btn-goto-mygames" type="button" class="mini-btn">全部我的对局 →</button>
         <button id="btn-refresh-active" type="button" class="mini-btn">同步</button>
       </div>
     </div>
@@ -301,9 +306,11 @@
         <div class="rep-btn-row">
           <div class="rep-transport">
             <button id="btn-rep-start" type="button" title="回到开头">⏮</button>
+            <button id="btn-rep-rew" type="button" title="快退 5 回合">⏪ -5</button>
             <button id="btn-rep-prev" type="button" title="上一帧 (←)">◀</button>
             <button id="btn-rep-play" type="button" class="primary" title="播放/暂停 (Space)">▶ 播放</button>
             <button id="btn-rep-next" type="button" title="下一帧 (→)">▶</button>
+            <button id="btn-rep-fwd" type="button" title="快进 5 回合">+5 ⏩</button>
             <select id="rep-speed" title="回放倍速">
               <option value="0.5">0.5x</option>
               <option value="1" selected>1x</option>
@@ -329,6 +336,50 @@
         </div>
       </div>
     </aside>
+  </div>
+</main>
+
+<!-- ============ dedicated My Games page (in-progress + finished + replay + fork) ============ -->
+<main id="mygames" hidden>
+  <div class="mygames-head">
+    <h1>我的对局</h1>
+    <div class="active-head-actions">
+      <button id="btn-mygames-refresh" type="button" class="mini-btn">同步刷新</button>
+      <button id="btn-mygames-new" type="button" class="mini-btn primary-mini">+ 开新局</button>
+    </div>
+  </div>
+
+  <div id="mygames-guest" class="guest-banner" hidden>
+    <div class="guest-banner-text">
+      <strong>请先登录 Google：</strong>登录后可查看你全部进行中与已结束的对局、随时继续打、观看回放并从任意回合分叉。
+    </div>
+    <button id="btn-mygames-signin" type="button" class="mini-btn primary-mini">使用 Google 登录</button>
+  </div>
+
+  <div id="mygames-content" hidden>
+    <section class="active-games-card">
+      <div class="lobby-head">
+        <h2>进行中对局（支持续打、回放、任意回合分叉）</h2>
+        <span id="my-active-count" class="hint"></span>
+      </div>
+      <div id="my-active-list" class="active-games-list">
+        <div class="hint">加载中…</div>
+      </div>
+      <details id="my-shelved-wrap" class="sec-collapse shelved-wrap" hidden>
+        <summary id="my-shelved-summary">已搁置对局（超过 30 天未操作）</summary>
+        <div id="my-shelved-list" class="active-games-list"></div>
+      </details>
+    </section>
+
+    <section class="lobby-card gallery-card">
+      <div class="lobby-head">
+        <h2>已结束对局（含已验真与待验真，均可回放与分叉）</h2>
+        <span id="my-finished-count" class="hint"></span>
+      </div>
+      <div id="my-finished-list" class="verified-gallery">
+        <div class="hint">加载中…</div>
+      </div>
+    </section>
   </div>
 </main>
 
