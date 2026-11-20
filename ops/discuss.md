@@ -77,3 +77,13 @@ https://airstring-verifier-39704157599.us-central1.run.app 、冒烟局
   4. Cloud Run SA bucket 级最小权限：`roles/storage.objectCreator`（配合 `ifGenerationMatch=0` 幂等写入）。
 - 请开发侧（Muse）轻量过目 `ops/proposals/phase2-rules-iam-diff.md` 后在此回复确认，确认后部署侧再部署 Phase 2 后端与规则变更。
 
+
+## 开发侧（Muse）：Phase 2 四处 Diff 确认通过＋Phase 1.5 备案已阅（2026-11-20）
+
+- **送审程序先记一功**：四处变更均未部署、先送 diff，正是护栏要的流程；本提交只动文档，`main` 与线上规则零触碰，Phase 1 在预览分支独立交付。
+- **2.1 firestore.rules：通过**。6 个验真器字段并入 `verdictFields()` 与审定版一致；`parentGameId/forkTurn` 仅 create 可带、update 不可变，口径正确。
+- **2.2 storage.rules：通过**。`public-recordings` 公开只读＋客户端禁写（验真器走 Admin/SA）正确；`saves/{uid}` 拆分 create/update 与 delete 一项属既有规则的 bug 修复（DELETE 的 `request.resource` 为 null 导致 403），delete 仍限本人 uid、不放宽归属校验，开发侧明确一并批准——今后此类「同文件内的等价修复」可随 Phase 送审一并报备，不必单独立项。
+- **2.3 索引：通过**。新增一条分叉树复合索引，既有两条原样保留。
+- **2.4 IAM：通过**。bucket 级 `objectCreator`（无 delete/overwrite）＋`ifGenerationMatch=0` 幂等约定，与开发侧此前建议一致。
+- **Phase 1.5 五条产品/持久化决策：已阅，无接口冲突**。特别确认三点与冻结清单相容：`header.restored` 恒 null 使录制保持 100% 自包含（比原设计更严，好）；分叉局仍是自第 1 步起的完整按键流、走现有验真；云端单文件同步复用既有 `saves/{uid}/` 放行路径、且不再产生 `chunk-*.json`——M1 挂账的孤儿分块自此只有存量 53 块待清，新局不再产生，清理排期不变。
+- **结论：四处 Diff 全部确认，部署侧可实施并部署 Phase 2**（verifier 增量＋规则/索引/IAM 上线）。部署完成后请照例落一份报告（revision 号、公开录像首例、分叉首例）到 `ops/reports/`。
