@@ -29,22 +29,3 @@ https://airstring-verifier-39704157599.us-central1.run.app 、冒烟局
 的任务文件在 `ops/tasks/OPS-1-verifier-auto-trigger-redeploy.md`，
 请按其执行、报告写 `ops/reports/OPS-1-report.md`。其中第三步是关门
 项：新局不经手工触发、状态自动翻 verified 才算过。
-
-## 部署侧（Antigravity）：报到（2026-11-19）
-
-- **GitHub 账号**：`ouut`（仓主账号经环境 GitHub 插件绑定，本条提交若已在远程即代表对 `ouut/airstring` 的 `push` 权限已通）。
-- **运行环境**：远程 Linux VM（Debian 12，`Linux 6.12.105+ x86_64`，无桌面浏览器，涉及网页 Google 登录与手打对局的冒烟步骤由用户配合执行）。
-  - 工具链：Node.js `v24.22.3`、`firebase-tools` `15.37.0`（`npx -y firebase-tools@latest`）、Google Cloud SDK `594.0.0`（用户目录安装）。
-  - 云端登录态：Firebase CLI 与 `gcloud` 均已登录至项目 Owner 账号（`airstring-nethack`），凭据仅存于本地运行环境，不入仓。
-- **当前状态**：
-  - 已拉取至 `f7c1f8f`，已熟读 `ops/README.md` 全部纪律（只部署不改代码/规则、Blaze 免费额度纪律、只追加不改历史、凭据与私钥绝不入仓）。
-  - 已确认首轮部署验收通过，并已查收 `ops/tasks/OPS-1-verifier-auto-trigger-redeploy.md`，待命执行并将在完成后落仓交付至 `ops/reports/OPS-1-report.md`。
-
-## 部署侧（Antigravity）：OPS-1 执行回报与停步（2026-11-19）
-
-- 完整报告已落仓：`ops/reports/OPS-1-report.md`；第四步已验真样本已落仓：`ops/samples/smoke-g-42-20261119213946-c35a.jsonl`（`4104 B`，sha256 `4aa402891ba991c68d52d025126754f96d706be466480de457626805183c860f`）。
-- **步骤状态**：第一步（新 revision `airstring-verifier-00002-hvd`，`/health` 200，无 Token `/verify` 401）、第二步（Hosting 重部署）、第四步（样本取回校验）均 PASS；**第三步（自动触发全链）因 CORS 预检失败停步**。
-- **停步实证**：新局 `g-42-20261120035713-ec39` 停在 `pending`（无 `verdicts/` 记录），浏览器控制台报错 `blocked by CORS policy: Response to preflight request doesn't pass access control check: No 'Access-Control-Allow-Origin' header is present on the requested resource.` 与 `[airstring] verify trigger failed: Failed to fetch`；CLI 实测 `OPTIONS /verify` 返回 `HTTP/2 404 {"error":"not-found"}`。
-- **附带排查提醒**：请开发侧修复 CORS（worker 加 CORS 头与 `OPTIONS` 204，或 Hosting rewrite 同源反代 `/verify`）时，**一并复核 `verifier/server.mjs` 中 `checkIdToken()` 调用 `oauth2.googleapis.com/tokeninfo` 是否接受 Firebase Auth ID Token**（`iss=https://securetoken.google.com/airstring-nethack`），以免过 CORS 后卡在 401。未改动仓内代码，等开发侧修复与新任务裁定。
-
-
