@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="airstring">
 <link rel="manifest" href="./manifest.json">
 <title>airstring · NetHack</title>
-<link rel="stylesheet" href="./airstring.css?v=p2fix1">
+<link rel="stylesheet" href="./airstring.css?v=p2fix2">
 </head>
 <body>
 <header id="topbar">
@@ -19,41 +19,55 @@
     <span class="tag">NetHack 3.6.7 · 种子对局 · 可验真</span>
   </div>
   <nav id="top-nav" aria-label="主导航">
-    <button id="nav-lobby" type="button" class="nav-tab active">大厅 / 开局</button>
-    <button id="nav-mygames" type="button" class="nav-tab">我的对局 <span id="nav-my-count" class="nav-badge" hidden>0</span></button>
+    <button id="nav-lobby" type="button" class="nav-tab active">大厅</button>
+    <button id="nav-mygames" type="button" class="nav-tab">对局 <span id="nav-my-count" class="nav-badge" hidden>0</span></button>
   </nav>
   <span id="auth-box"></span>
 </header>
 
-<!-- ============ setup screen ============ -->
+<!-- ============ Hall screen (大厅: Public Replay Gallery first, Enter Dungeon at bottom) ============ -->
 <main id="setup">
-  <!-- Guest reminder (shown when signed out) -->
   <div id="guest-banner" class="guest-banner" hidden>
     <div class="guest-banner-text">
-      <strong>游客试玩模式：</strong>不保存进度（刷新页面将丢失当前对局）、不计入云端榜单。登录 Google 即可自动保存并随时跨设备续打。
+      <strong>游客试玩模式：</strong>不保存进度（刷新将丢失当前局）、不计入榜单。登录 Google 即可自动保存、跨设备续打并参与回放留言。
     </div>
     <button id="btn-guest-signin" type="button" class="mini-btn primary-mini">Google 登录</button>
   </div>
 
-  <!-- Signed-in user's in-progress games quick card -->
-  <section id="active-games-card" class="active-games-card" hidden>
-    <div class="lobby-head">
-      <h2>我的进行中对局</h2>
-      <div class="active-head-actions">
-        <span id="active-sync-hint" class="hint"></span>
-        <button id="btn-goto-mygames" type="button" class="mini-btn">全部我的对局 →</button>
-        <button id="btn-refresh-active" type="button" class="mini-btn">同步</button>
-      </div>
-    </div>
-    <div id="active-games-list" class="active-games-list"></div>
-    <details id="shelved-games-wrap" class="sec-collapse shelved-wrap" hidden>
-      <summary id="shelved-games-summary">已搁置对局（超过 30 天未操作，随时可续打或分叉）</summary>
-      <div id="shelved-games-list" class="active-games-list"></div>
-    </details>
-  </section>
-
   <div class="setup-grid">
-    <section class="setup-card">
+    <!-- Top: YouTube-style Public Verified Replay Gallery -->
+    <section class="lobby-card gallery-card">
+      <div class="lobby-head">
+        <div class="gallery-title-wrap">
+          <h2>公开已验真录像</h2>
+          <div id="lobby-filters" class="lobby-filters" role="tablist">
+            <button type="button" class="filter-pill active" data-filter="all">全部</button>
+            <button type="button" class="filter-pill" data-filter="ascended">🏆 飞升</button>
+            <button type="button" class="filter-pill" data-filter="died">💀 阵亡</button>
+            <button type="button" class="filter-pill" data-filter="fork">⚡ 分叉</button>
+            <button type="button" class="filter-pill" data-filter="deep">🕳 深层</button>
+          </div>
+        </div>
+        <div class="gallery-tools">
+          <select id="lobby-role-filter" aria-label="按职业筛选">
+            <option value="all">全部职业</option>
+          </select>
+          <select id="lobby-sort" aria-label="排序方式">
+            <option value="newest">最新</option>
+            <option value="dlvl">最深层数</option>
+            <option value="turns">最长回合</option>
+          </select>
+          <input id="lobby-search" type="search" placeholder="搜种子 / 职业 / 玩家 / 死因…" autocomplete="off">
+          <button id="btn-scroll-newgame" type="button" class="mini-btn primary-mini">+ 开新局</button>
+        </div>
+      </div>
+      <div id="verified-list" class="verified-gallery">
+        <div class="hint">加载中…</div>
+      </div>
+    </section>
+
+    <!-- Bottom: Enter Dungeon form -->
+    <section id="enter-dungeon" class="setup-card">
       <div class="setup-head">
         <h1>进入地牢</h1>
         <span class="pill-ok">纯字符终端 · 逐帧可验真</span>
@@ -115,33 +129,11 @@
         </div>
       </form>
     </section>
-
-    <section class="lobby-card gallery-card">
-      <div class="lobby-head">
-        <div class="gallery-title-wrap">
-          <h2>公开已验真录像大厅</h2>
-          <div id="lobby-filters" class="lobby-filters" role="tablist">
-            <button type="button" class="filter-pill active" data-filter="all">全部</button>
-            <button type="button" class="filter-pill" data-filter="ascended">🏆 飞升</button>
-            <button type="button" class="filter-pill" data-filter="died">💀 阵亡</button>
-            <button type="button" class="filter-pill" data-filter="fork">⚡ 分叉</button>
-          </div>
-        </div>
-        <div class="gallery-tools">
-          <input id="lobby-search" type="search" placeholder="搜索种子 / 职业 / 玩家…" autocomplete="off">
-          <button id="btn-refresh-lobby" type="button" class="mini-btn">刷新</button>
-        </div>
-      </div>
-      <div id="verified-list" class="verified-gallery">
-        <div class="hint">加载中…</div>
-      </div>
-    </section>
   </div>
 </main>
 
 <!-- ============ game screen (100dvh pure-black Curses terminal) ============ -->
 <main id="game" hidden>
-  <!-- Top bar inside game: 2-line messages (left) + minimal icon triggers (right) -->
   <div id="game-top">
     <div id="msg-wrap" role="button" tabindex="0" title="点击展开消息历史">
       <div id="msg-prev" aria-hidden="true"></div>
@@ -154,16 +146,12 @@
     </div>
   </div>
 
-  <!-- Main dungeon stage (unobstructed pure black, overlays live INSIDE stage) -->
   <div id="stage">
     <div id="grid" role="img" aria-label="地图"></div>
 
     <button id="btn-zoom" type="button" hidden title="切换跟随视角与全图缩览">🗺 全图</button>
-
-    <!-- Non-intrusive toast (login claim / auto-fork notice) -->
     <div id="game-toast" hidden></div>
 
-    <!-- Video-style buffer fast-forward progress overlay -->
     <div id="buffer-overlay" hidden>
       <div class="buffer-card">
         <div id="buffer-title" class="buffer-title">正在缓冲对局…</div>
@@ -173,19 +161,17 @@
       </div>
     </div>
 
-    <!-- Same-device multi-tab lock overlay -->
     <div id="tab-lock-overlay" hidden>
       <div class="buffer-card">
         <div class="buffer-title">你已在另一个标签页继续本局</div>
         <div class="buffer-sub">为避免多标签页同时写入冲突，本页已暂停操作与保存。</div>
         <div class="tab-lock-actions">
           <button id="btn-tab-reclaim" type="button" class="primary">在此页重新接管</button>
-          <button id="btn-tab-back" type="button">返回开局页</button>
+          <button id="btn-tab-back" type="button">返回大厅</button>
         </div>
       </div>
     </div>
 
-    <!-- True overlay: Curses right-side menu OR centered text/RIP modal -->
     <div id="overlay" hidden>
       <div id="overlay-card">
         <div id="overlay-head">
@@ -197,7 +183,6 @@
       </div>
     </div>
 
-    <!-- Line prompt bar (docked cleanly at bottom of stage, ONLY visible when active) -->
     <div id="linebar" hidden>
       <span id="line-q"></span>
       <input id="line-input" type="text" autocomplete="off"
@@ -206,7 +191,6 @@
       <button id="line-cancel" type="button">取消</button>
     </div>
 
-    <!-- Expandable 200-line message log drawer (toggled from bottom Log key or top message bar) -->
     <div id="msglog-drawer" hidden>
       <div class="drawer-head">
         <span>消息历史（最近 200 条）</span>
@@ -215,7 +199,6 @@
       <div id="msglog"></div>
     </div>
 
-    <!-- Command search panel (toggled on demand) -->
     <div id="panel" hidden>
       <div class="panel-head">
         <input id="panel-search" type="search" placeholder="搜索全部命令…">
@@ -224,20 +207,16 @@
       <div id="panel-list"></div>
     </div>
 
-    <!-- Game-over report card -->
     <div id="gameover" hidden></div>
   </div>
 
-  <!-- Plan A: compact 1-line statushilites HUD + 2px HP bar directly below map -->
   <div id="status-wrap">
     <div id="status"></div>
     <div id="hp-bar-track"><div id="hp-bar-fill"></div></div>
   </div>
 
-  <!-- Bottom thumb control zone (mobile portrait default; hidden on desktop unless toggled) -->
   <div id="actionbar"></div>
 
-  <!-- Slide-over game menu drawer (seed info, sync status, fork, commands, exit) -->
   <div id="game-drawer" hidden>
     <div id="game-drawer-backdrop"></div>
     <div id="game-drawer-panel">
@@ -251,7 +230,7 @@
         <button id="btn-commands" type="button">全部命令面板</button>
         <button id="btn-drawer-log" type="button">查看消息历史</button>
         <button id="btn-fork-now" type="button">从当前回合分叉新局</button>
-        <button id="btn-newgame" type="button" class="danger-btn">返回开局页</button>
+        <button id="btn-newgame" type="button" class="danger-btn">返回大厅</button>
       </div>
       <div class="drawer-foot">
         录制只认按键流，所有点按均翻译为原按键序列。<br>
@@ -261,7 +240,7 @@
   </div>
 </main>
 
-<!-- ============ replay theater (Phase 2: YouTube-style ASCII player + 1-click Fork) ============ -->
+<!-- ============ replay theater (YouTube-style ASCII player + 1-click Fork + Turn Comments) ============ -->
 <main id="replay" hidden>
   <div class="replay-top">
     <div class="replay-top-left">
@@ -270,59 +249,83 @@
       <span id="rep-badge" class="vgame-badge">✓ 已验真</span>
     </div>
     <div class="replay-top-right">
+      <button id="btn-rep-sameseed" type="button" class="mini-btn">同种子开局</button>
       <button id="btn-rep-share" type="button" class="mini-btn">🔗 复制链接</button>
     </div>
   </div>
 
   <div class="replay-layout">
-    <section class="replay-main">
-      <div class="rep-msg-wrap">
-        <div id="rep-msg-prev"></div>
-        <div id="rep-msg"></div>
-      </div>
+    <div class="replay-left-col">
+      <section class="replay-main">
+        <div class="rep-msg-wrap">
+          <div id="rep-msg-prev"></div>
+          <div id="rep-msg"></div>
+        </div>
 
-      <div id="rep-stage">
-        <div id="rep-grid" role="img" aria-label="回放地图"></div>
-        <div id="rep-buffer-overlay" hidden>
-          <div class="buffer-card">
-            <div id="rep-buffer-title" class="buffer-title">正在缓冲回放帧…</div>
-            <div class="buffer-track"><div id="rep-buffer-fill"></div></div>
-            <div id="rep-buffer-detail" class="buffer-detail">下载公开录像中…</div>
-            <div class="buffer-sub">本地 WASM 帧缓存就绪后支持 0 延迟前进/后退拖拽</div>
+        <div id="rep-stage">
+          <div id="rep-grid" role="img" aria-label="回放地图"></div>
+          <div id="rep-buffer-overlay" hidden>
+            <div class="buffer-card">
+              <div id="rep-buffer-title" class="buffer-title">正在缓冲回放帧…</div>
+              <div class="buffer-track"><div id="rep-buffer-fill"></div></div>
+              <div id="rep-buffer-detail" class="buffer-detail">下载公开录像中…</div>
+              <div class="buffer-sub">本地 WASM 帧缓存就绪后支持 0 延迟前进/后退拖拽</div>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div id="rep-status-wrap">
-        <div id="rep-status"></div>
-        <div id="rep-hp-track"><div id="rep-hp-fill"></div></div>
-      </div>
-
-      <div id="rep-controls">
-        <div class="rep-seek-row">
-          <input id="rep-seek" type="range" min="0" max="0" value="0" step="1">
-          <span id="rep-time">回合 0 / 0</span>
+        <div id="rep-status-wrap">
+          <div id="rep-status"></div>
+          <div id="rep-hp-track"><div id="rep-hp-fill"></div></div>
         </div>
-        <div class="rep-btn-row">
-          <div class="rep-transport">
-            <button id="btn-rep-start" type="button" title="回到开头">⏮</button>
-            <button id="btn-rep-rew" type="button" title="快退 5 回合">⏪ -5</button>
-            <button id="btn-rep-prev" type="button" title="上一帧 (←)">◀</button>
-            <button id="btn-rep-play" type="button" class="primary" title="播放/暂停 (Space)">▶ 播放</button>
-            <button id="btn-rep-next" type="button" title="下一帧 (→)">▶</button>
-            <button id="btn-rep-fwd" type="button" title="快进 5 回合">+5 ⏩</button>
-            <select id="rep-speed" title="回放倍速">
-              <option value="0.5">0.5x</option>
-              <option value="1" selected>1x</option>
-              <option value="2">2x</option>
-              <option value="4">4x</option>
-              <option value="8">8x</option>
-            </select>
+
+        <div id="rep-controls">
+          <div class="rep-seek-row">
+            <input id="rep-seek" type="range" min="0" max="0" value="0" step="1">
+            <span id="rep-time">回合 0 / 0</span>
           </div>
-          <button id="btn-rep-fork" type="button" class="fork-cta">⚡ 从当前回合分叉由我来打</button>
+          <div class="rep-btn-row">
+            <div class="rep-transport">
+              <button id="btn-rep-start" type="button" title="回到开头">⏮</button>
+              <button id="btn-rep-rew" type="button" title="快退 5 回合">⏪ -5</button>
+              <button id="btn-rep-prev" type="button" title="上一帧 (←)">◀</button>
+              <button id="btn-rep-play" type="button" class="primary" title="播放/暂停 (Space)">▶ 播放</button>
+              <button id="btn-rep-next" type="button" title="下一帧 (→)">▶</button>
+              <button id="btn-rep-fwd" type="button" title="快进 5 回合">+5 ⏩</button>
+              <select id="rep-speed" title="回放倍速">
+                <option value="0.5">0.5x</option>
+                <option value="1" selected>1x</option>
+                <option value="2">2x</option>
+                <option value="4">4x</option>
+                <option value="8">8x</option>
+              </select>
+            </div>
+            <button id="btn-rep-fork" type="button" class="fork-cta">⚡ 从当前回合分叉由我来打</button>
+          </div>
         </div>
-      </div>
-    </section>
+      </section>
+
+      <!-- Turn-anchored replay comments (YouTube-style below stage) -->
+      <section id="rep-comments-card" class="rep-card rep-comments-card">
+        <div class="lobby-head">
+          <h3>回放留言 <span id="rep-comments-count" class="hint"></span></h3>
+        </div>
+        <form id="rep-comment-form" class="rep-comment-form" hidden>
+          <textarea id="rep-comment-input" rows="2" maxlength="500" placeholder="分享路线点评或精彩瞬间（最多 500 字）…"></textarea>
+          <div class="rep-comment-bar">
+            <label class="rep-turn-check">
+              <input id="rep-comment-turn-chk" type="checkbox" checked>
+              <span id="rep-comment-turn-label">📍 关联当前第 0 回合</span>
+            </label>
+            <button id="btn-rep-comment-send" type="submit" class="mini-btn primary-mini">发表留言</button>
+          </div>
+        </form>
+        <div id="rep-comment-guest" class="hint" hidden>登录 Google 后即可发表带回合锚点的回放留言。</div>
+        <div id="rep-comments-list" class="rep-comments-list">
+          <div class="hint">加载留言中…</div>
+        </div>
+      </section>
+    </div>
 
     <aside class="replay-side">
       <div class="rep-card">
@@ -339,12 +342,11 @@
   </div>
 </main>
 
-<!-- ============ dedicated My Games page (in-progress + finished + replay + fork) ============ -->
+<!-- ============ My Games page (对局: In-progress with ASCII thumbs + Finished with soft-delete) ============ -->
 <main id="mygames" hidden>
   <div class="mygames-head">
-    <h1>我的对局</h1>
+    <h1>对局</h1>
     <div class="active-head-actions">
-      <button id="btn-mygames-refresh" type="button" class="mini-btn">同步刷新</button>
       <button id="btn-mygames-new" type="button" class="mini-btn primary-mini">+ 开新局</button>
     </div>
   </div>
@@ -359,21 +361,21 @@
   <div id="mygames-content" hidden>
     <section class="active-games-card">
       <div class="lobby-head">
-        <h2>进行中对局（支持续打、回放、任意回合分叉）</h2>
+        <h2>进行中对局</h2>
         <span id="my-active-count" class="hint"></span>
       </div>
-      <div id="my-active-list" class="active-games-list">
+      <div id="my-active-list" class="verified-gallery">
         <div class="hint">加载中…</div>
       </div>
       <details id="my-shelved-wrap" class="sec-collapse shelved-wrap" hidden>
         <summary id="my-shelved-summary">已搁置对局（超过 30 天未操作）</summary>
-        <div id="my-shelved-list" class="active-games-list"></div>
+        <div id="my-shelved-list" class="verified-gallery"></div>
       </details>
     </section>
 
     <section class="lobby-card gallery-card">
       <div class="lobby-head">
-        <h2>已结束对局（含已验真与待验真，均可回放与分叉）</h2>
+        <h2>已结束对局</h2>
         <span id="my-finished-count" class="hint"></span>
       </div>
       <div id="my-finished-list" class="verified-gallery">
@@ -384,7 +386,7 @@
 </main>
 
 <footer id="foot">airstring · NetHack 3.6.7 · 种子对局 · 全程可验真</footer>
-<script src="./firebase-config.js?v=p2fix1"></script>
-<script type="module" src="./airstring.js?v=p2fix1"></script>
+<script src="./firebase-config.js?v=p2fix2"></script>
+<script type="module" src="./airstring.js?v=p2fix2"></script>
 </body>
 </html>

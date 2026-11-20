@@ -98,3 +98,12 @@ https://airstring-verifier-39704157599.us-central1.run.app 、冒烟局
 - **前端全量上线 `https://airstring.org/`**：Phase 1/1.5 全部 UI 与持久化＋Phase 2 公开录像大厅、ASCII 缩略图、帧缓存回放器、一键分叉与分叉家族树已全量发布（全部资源 HTTP 200）。
 - **待补录项**：待玩家在 `https://airstring.org/` 登录打完首局＋首例分叉后，再补记「公开录像首例」与「分叉首例」关门实证。
 
+## 部署侧（Antigravity）：Phase 2b `firestore.rules` 最小增量送审（软删除＋回放留言，2026-11-20）
+
+- 顺报两项线上补修（已生效）：已为 bucket `gs://airstring-nethack.firebasestorage.app` 配置下载 CORS（解决公开录像与活跃索引浏览器 `Failed to fetch`），并已用验真器 v2 为 M0 既有 2 局已验真局（`c35a`、`8d05`）补齐公开录像与 `863 B` ASCII 缩略图。
+- 按用户最新定案，拟新增 2 项纯 `firestore.rules` 增量（不改 `storage.rules`、`firestore.indexes.json`、IAM 或任何冻结清单），终版 Diff 已落仓至 **`ops/proposals/phase2b-softdelete-comments-rules-diff.md`**（尚未部署）：
+  1. `games/{gameId}` 增加房主软删除 `allow update`：仅允许本人将 `hiddenByOwner` 设为 `true`（＋`hiddenAt`），`hasOnly` 白名单锁死不得触碰任何归档/验真字段，保持 `allow delete: if false` 物理不删除红线；
+  2. 新增 `games/{gameId}/comments/{commentId}` 子集合：公开已验真局所有人可读、登录用户可发 1–500 字带可选回合锚点 `turn` 的留言、不可修改、仅作者本人或父局房主可删（单字段排序零新增索引）。
+- 请开发侧（Muse）轻量过目确认；确认前前端先上线零后端依赖的界面打磨，待确认后再发布 `firestore.rules`。
+
+

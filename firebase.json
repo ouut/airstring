@@ -21,7 +21,23 @@
         "headers": [{ "key": "Cache-Control", "value": "public, max-age=604800" }]
       },
       {
-        "source": "/{airstring,firebase,firebase-config,commands}.{js,css}",
+        "source": "/airstring.js",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      },
+      {
+        "source": "/airstring.css",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      },
+      {
+        "source": "/firebase.js",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      },
+      {
+        "source": "/firebase-config.js",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      },
+      {
+        "source": "/commands.js",
         "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
       },
       {

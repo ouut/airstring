@@ -248,6 +248,7 @@ try {
             dlvl: snapshot.dlvl || 1,
             hp: snapshot.hp != null ? snapshot.hp : null,
             hpmax: snapshot.hpmax != null ? snapshot.hpmax : null,
+            thumb: snapshot.thumb || null,
             startedAt: snapshot.startedAt || null,
             updatedAt: snapshot.updatedAt || new Date().toISOString(),
             sessionId: snapshot.sessionId || null,
@@ -281,6 +282,48 @@ try {
           } catch (_) { /* best-effort */ }
         });
         await indexOpChain;
+      },
+
+      /* Soft-delete (hide) owner's finished game without destroying archival data */
+      async softDeleteGame(gameId) {
+        if (!user) throw new Error('not-signed-in');
+        await fsMod.updateDoc(fsMod.doc(db, 'games', gameId), {
+          hiddenByOwner: true,
+          hiddenAt: fsMod.serverTimestamp(),
+        });
+      },
+
+      /* Replay turn-anchored comments */
+      async addReplayComment(gameId, { text, turn }) {
+        if (!user) throw new Error('not-signed-in');
+        const cleanText = String(text || '').trim().slice(0, 500);
+        if (!cleanText) throw new Error('empty-comment');
+        const authorName = String(
+          user.displayName || (user.email ? user.email.split('@')[0] : '冒险者')
+        ).trim().slice(0, 60) || '冒险者';
+        const turnVal = (typeof turn === 'number' && Number.isInteger(turn) && turn >= 0)
+          ? turn : null;
+        const colRef = fsMod.collection(db, 'games', gameId, 'comments');
+        const docRef = await fsMod.addDoc(colRef, {
+          uid: user.uid,
+          authorName,
+          text: cleanText,
+          turn: turnVal,
+          createdAt: fsMod.serverTimestamp(),
+        });
+        return {
+          id: docRef.id,
+          uid: user.uid,
+          authorName,
+          text: cleanText,
+          turn: turnVal,
+          createdAt: new Date().toISOString(),
+        };
+      },
+
+      async deleteReplayComment(gameId, commentId) {
+        if (!user) throw new Error('not-signed-in');
+        await fsMod.deleteDoc(fsMod.doc(db, 'games', gameId, 'comments', commentId));
       },
 
       /* canonical recording + the games index doc (pending) + auto-verify */

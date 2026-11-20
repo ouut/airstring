@@ -25,7 +25,7 @@ import { COMMANDS, DIRS, dirByte } from './commands.js';
  * In every other case `cloud` is null (or reports no user) and the
  * upload path below is the S5 local-stub behaviour, unchanged. */
 let cloud = null;
-try { cloud = (await import('./firebase.js?v=p2fix1')).default; }
+try { cloud = (await import('./firebase.js?v=p2fix2')).default; }
 catch (e) { cloud = null; }
 function cloudActive() { return !!(cloud && cloud.currentUser()); }
 
@@ -62,10 +62,17 @@ try { rightHandPad = localStorage.getItem('airstring_hand_right') === '1'; } cat
 function fillSetupForm() {
   const roleSel = $('opt-role'), raceSel = $('opt-race'), alignSel = $('opt-align');
   const cardsBox = $('role-cards');
+  const lobbyRoleSel = $('lobby-role-filter');
   for (const [k, v] of Object.entries(ROLES)) {
     const o = document.createElement('option');
     o.value = k; o.textContent = v.zh + ' (' + k + ')';
     roleSel.appendChild(o);
+
+    if (lobbyRoleSel) {
+      const fo = document.createElement('option');
+      fo.value = k; fo.textContent = v.zh + ' · ' + k;
+      lobbyRoleSel.appendChild(fo);
+    }
 
     if (cardsBox) {
       const chip = document.createElement('button');
@@ -114,7 +121,7 @@ function fillSetupForm() {
   sync();
 }
 
-/* ---------------- setup lobby: Phase 2 YouTube-style verified replay gallery ---------------- */
+/* ---------------- setup lobby: YouTube-style verified replay gallery ---------------- */
 function parseOptionMap(optStr) {
   const out = {};
   for (const part of String(optStr || '').split(',')) {
@@ -136,6 +143,48 @@ function fsVal(f) {
   return null;
 }
 
+function formatRelativeTime(iso) {
+  if (!iso) return '';
+  const ts = Date.parse(iso);
+  if (!Number.isFinite(ts)) return '';
+  const diffSec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (diffSec < 60) return '刚刚';
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)} 分钟前`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} 小时前`;
+  if (diffSec < 7 * 86400) return `${Math.floor(diffSec / 86400)} 天前`;
+  return new Date(ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit' });
+}
+
+function buildClientAsciiThumb(mapRows, mapColors) {
+  if (!Array.isArray(mapRows) || !mapRows.length) return null;
+  const W = 35, H = 11;
+  const colors = Array.isArray(mapColors) ? mapColors : [];
+  let hx = 40, hy = 10;
+  for (let y = 0; y < mapRows.length; y++) {
+    const x = String(mapRows[y] || '').indexOf('@');
+    if (x >= 0) { hx = x; hy = y; break; }
+  }
+  const mapH = Math.min(21, mapRows.length);
+  const x0 = Math.max(0, Math.min(80 - W, hx - Math.floor(W / 2)));
+  const y0 = Math.max(0, Math.min(Math.max(0, mapH - H), hy - Math.floor(H / 2)));
+  const r = [];
+  const c = [];
+  for (let dy = 0; dy < H; dy++) {
+    const my = y0 + dy;
+    const line = String(mapRows[my] || '').padEnd(80, ' ');
+    const cline = Array.isArray(colors[my]) ? colors[my] : [];
+    r.push(line.slice(x0, x0 + W));
+    let cs = '';
+    for (let dx = 0; dx < W; dx++) {
+      const col = cline[x0 + dx];
+      cs += (typeof col === 'number' ? (col & 0xf) : 7).toString(16);
+    }
+    c.push(cs);
+  }
+  const json = JSON.stringify({ w: W, h: H, r, c });
+  return json.length <= 2048 ? json : null;
+}
+
 function parseGameDoc(doc) {
   const f = (doc && doc.fields) || {};
   const gameId = fsVal(f.gameId) || (doc.name ? doc.name.split('/').pop() : '');
@@ -145,6 +194,7 @@ function parseGameDoc(doc) {
     gameId,
     uid: fsVal(f.uid) || null,
     status: fsVal(f.status) || 'verified',
+    hiddenByOwner: !!fsVal(f.hiddenByOwner),
     seed: String(fsVal(f.seed) ?? '?'),
     seedSource: fsVal(f.seedSource) || 'given',
     options,
@@ -175,6 +225,7 @@ function normalizePlainGame(d) {
     gameId: d.gameId || d.id || '',
     uid: d.uid || null,
     status: d.status || 'pending',
+    hiddenByOwner: !!d.hiddenByOwner,
     seed: String(d.seed ?? '?'),
     seedSource: d.seedSource || 'given',
     options,
@@ -252,13 +303,15 @@ function canWatchGame(g) {
 
 function buildGalleryCard(g, fromPage) {
   const roleZh = (ROLES[g.roleKey] && ROLES[g.roleKey].zh) || g.roleKey;
-  const when = g.createdAt
-    ? new Date(g.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
-    : '';
+  const when = formatRelativeTime(g.createdAt);
   const watchable = canWatchGame(g);
 
   const card = document.createElement('article');
-  card.className = 'vgame-card';
+  card.className = 'vgame-card' + (watchable ? ' clickable' : '');
+  if (watchable) {
+    card.title = '点击观看录像并可从任意回合分叉';
+    card.addEventListener('click', () => openReplay(g, { fromPage }));
+  }
 
   const thumbWrap = document.createElement('div');
   thumbWrap.className = 'vgame-thumb-wrap';
@@ -268,19 +321,18 @@ function buildGalleryCard(g, fromPage) {
   } else {
     const ph = document.createElement('div');
     ph.className = 'ascii-thumb-placeholder';
-    ph.textContent = `@  #${g.seed}\n${g.name} · ${roleZh}\n` +
-      (watchable ? '点击播放本地 WASM 回放' : '（历史局无公开录像）');
+    ph.textContent = `@  #${g.seed}\n${g.name} · ${roleZh}`;
     thumbWrap.appendChild(ph);
   }
 
   const outPill = document.createElement('span');
   outPill.className = 'thumb-pill-tl' +
     (g.outcome === 'ascended' ? ' ascended' : g.outcome === 'died' ? ' died' : '');
-  outPill.textContent = g.status === 'pending' ? '⏳ 待验真'
+  outPill.textContent = g.status === 'pending' ? '⏳ 验真中'
     : g.status === 'rejected' ? '✗ 未通过'
     : g.outcome === 'ascended' ? '🏆 飞升'
     : g.outcome === 'died' ? '💀 阵亡'
-    : g.parentGameId ? '⚡ 分叉局' : '✓ 已验真';
+    : g.parentGameId ? '⚡ 分叉' : '✓ 已验真';
   thumbWrap.appendChild(outPill);
 
   const framePill = document.createElement('span');
@@ -293,18 +345,13 @@ function buildGalleryCard(g, fromPage) {
   statPill.textContent = (g.maxDlvl ? `Dlvl:${g.maxDlvl} · ` : '') + `T:${g.turns}`;
   thumbWrap.appendChild(statPill);
 
-  if (watchable) {
-    thumbWrap.title = '点击观看录像与分叉';
-    thumbWrap.addEventListener('click', () => openReplay(g, { fromPage }));
-  }
-
   const body = document.createElement('div');
   body.className = 'vgame-body';
 
   const top = document.createElement('div');
   top.className = 'vgame-top';
   const title = document.createElement('span');
-  title.textContent = `${g.name} · ${roleZh} · #${g.seed}`;
+  title.textContent = `${roleZh} · ${g.name}`;
   top.appendChild(title);
   if (g.parentGameId) {
     const fb = document.createElement('span');
@@ -312,70 +359,71 @@ function buildGalleryCard(g, fromPage) {
     fb.textContent = `⚡ T${g.forkTurn ?? 0}`;
     top.appendChild(fb);
   }
+  const seedTag = document.createElement('span');
+  seedTag.className = 'vgame-seed-tag';
+  seedTag.textContent = `#${g.seed}`;
+  top.appendChild(seedTag);
 
-  const meta = document.createElement('div');
-  meta.className = 'vgame-meta';
-  const m1 = document.createElement('span');
-  m1.textContent = g.gameId;
-  const m2 = document.createElement('span');
-  m2.textContent = when;
-  meta.append(m1, m2);
+  const subRow = document.createElement('div');
+  subRow.className = 'vgame-subrow';
+  const rs = document.createElement('span');
+  rs.className = 'vgame-reason';
+  rs.textContent = g.deathReason || (g.status === 'pending' ? '后台自动验真中…' : g.gameId);
+  rs.title = rs.textContent;
+  const wh = document.createElement('span');
+  wh.className = 'vgame-when';
+  wh.textContent = when;
+  subRow.append(rs, wh);
 
-  body.append(top, meta);
-  if (g.deathReason) {
-    const rs = document.createElement('div');
-    rs.className = 'vgame-reason';
-    rs.textContent = g.deathReason;
-    rs.title = g.deathReason;
-    body.appendChild(rs);
+  body.append(top, subRow);
+
+  /* Only in "对局" (My Games) show subtle soft-delete link */
+  if (fromPage === 'mygames') {
+    const acts = document.createElement('div');
+    acts.className = 'card-corner-actions';
+    const bDel = document.createElement('button');
+    bDel.type = 'button';
+    bDel.className = 'card-link-act danger';
+    bDel.textContent = '删除';
+    bDel.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm(`确定删除（隐藏）「${roleZh} · ${g.name}（T${g.turns}）」？隐藏后将不再在大厅和对局列表显示。`)) return;
+      try {
+        await cloud.softDeleteGame(g.gameId);
+        verifiedGamesCache = verifiedGamesCache.filter((x) => x.gameId !== g.gameId);
+        renderVerifiedGallery();
+        card.remove();
+        refreshMyGamesPage(true);
+      } catch (err) {
+        alert('删除失败（若规则刚提交审核请稍后再试）：' + (err && err.message ? err.message : err));
+      }
+    });
+    acts.appendChild(bDel);
+    body.appendChild(acts);
   }
 
-  const foot = document.createElement('div');
-  foot.className = 'vgame-foot';
-
-  if (watchable) {
-    const playBtn = document.createElement('button');
-    playBtn.type = 'button';
-    playBtn.className = 'mini-btn play-btn';
-    playBtn.textContent = '▶ 回放 / 分叉';
-    playBtn.addEventListener('click', () => openReplay(g, { fromPage }));
-    foot.appendChild(playBtn);
-  }
-
-  const sameBtn = document.createElement('button');
-  sameBtn.type = 'button';
-  sameBtn.className = 'mini-btn';
-  sameBtn.textContent = '同种子开局';
-  sameBtn.addEventListener('click', () => {
-    showSetup();
-    const givenRadio = document.querySelector('input[name="seedmode"][value="given"]');
-    if (givenRadio) givenRadio.checked = true;
-    if (/^\d+$/.test(String(g.seed))) $('seed-input').value = String(g.seed);
-    if (ROLES[g.roleKey]) {
-      $('opt-role').value = g.roleKey;
-      $('opt-role').dispatchEvent(new Event('change'));
-    }
-    $('start-btn').scrollIntoView({ behavior: 'smooth', block: 'center' });
-  });
-  foot.appendChild(sameBtn);
-
-  body.appendChild(foot);
   card.append(thumbWrap, body);
   return card;
 }
 
 let verifiedGamesCache = [];
+let lastLobbyFetchAt = 0;
 let lobbyFilter = 'all';
 
 function renderVerifiedGallery() {
   const box = $('verified-list');
   if (!box) return;
   const q = (($('lobby-search') && $('lobby-search').value) || '').trim().toLowerCase();
+  const roleF = ($('lobby-role-filter') && $('lobby-role-filter').value) || 'all';
+  const sortBy = ($('lobby-sort') && $('lobby-sort').value) || 'newest';
 
   const list = verifiedGamesCache.filter((g) => {
+    if (g.hiddenByOwner) return false;
     if (lobbyFilter === 'ascended' && g.outcome !== 'ascended') return false;
     if (lobbyFilter === 'died' && g.outcome !== 'died') return false;
     if (lobbyFilter === 'fork' && !g.parentGameId) return false;
+    if (lobbyFilter === 'deep' && (g.maxDlvl || 1) < 10) return false;
+    if (roleF !== 'all' && g.roleKey !== roleF) return false;
     if (q) {
       const roleZh = (ROLES[g.roleKey] && ROLES[g.roleKey].zh) || '';
       const hay = `${g.name} ${g.roleKey} ${roleZh} ${g.seed} ${g.gameId} ${g.deathReason || ''}`.toLowerCase();
@@ -383,6 +431,14 @@ function renderVerifiedGallery() {
     }
     return true;
   });
+
+  if (sortBy === 'dlvl') {
+    list.sort((a, b) => ((b.maxDlvl || 1) - (a.maxDlvl || 1)) || ((b.turns || 0) - (a.turns || 0)));
+  } else if (sortBy === 'turns') {
+    list.sort((a, b) => (b.turns || 0) - (a.turns || 0));
+  } else {
+    list.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  }
 
   if (!list.length) {
     box.innerHTML = '<div class="hint">没有匹配筛选条件的公开已验真对局。</div>';
@@ -395,7 +451,7 @@ function renderVerifiedGallery() {
   }
 }
 
-async function loadVerifiedLobby() {
+async function loadVerifiedLobby(force = false) {
   const box = $('verified-list');
   if (!box) return;
   const cfg = globalThis.AIRSTRING_FIREBASE_CONFIG;
@@ -404,7 +460,14 @@ async function loadVerifiedLobby() {
     box.innerHTML = '<div class="hint">本地桩模式：未连接云端录像大厅。</div>';
     return;
   }
-  box.innerHTML = '<div class="hint">加载公开已验真录像…</div>';
+  /* 30-second cache throttle to protect Firestore read quota */
+  if (!force && verifiedGamesCache.length && (Date.now() - lastLobbyFetchAt < 30000)) {
+    renderVerifiedGallery();
+    return;
+  }
+  if (!verifiedGamesCache.length) {
+    box.innerHTML = '<div class="hint">加载公开已验真录像…</div>';
+  }
   try {
     const url = 'https://firestore.googleapis.com/v1/projects/' +
       encodeURIComponent(project) + '/databases/(default)/documents:runQuery';
@@ -422,22 +485,26 @@ async function loadVerifiedLobby() {
             },
           },
           orderBy: [{ field: { fieldPath: 'createdAt' }, direction: 'DESCENDING' }],
-          limit: 36,
+          limit: 24,
         },
       }),
     });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const rows = await r.json();
+    lastLobbyFetchAt = Date.now();
     verifiedGamesCache = rows
       .filter((x) => x.document && x.document.fields)
-      .map((x) => parseGameDoc(x.document));
+      .map((x) => parseGameDoc(x.document))
+      .filter((g) => !g.hiddenByOwner);
     if (!verifiedGamesCache.length) {
-      box.innerHTML = '<div class="hint">暂无公开已验真对局，开一局成为第一人！</div>';
+      box.innerHTML = '<div class="hint">暂无公开已验真对局，往下滚动开一局成为第一人！</div>';
       return;
     }
     renderVerifiedGallery();
   } catch (e) {
-    box.innerHTML = '<div class="hint">暂时无法拉取已验真列表（不影响离线或正常游玩）。</div>';
+    if (!verifiedGamesCache.length) {
+      box.innerHTML = '<div class="hint">暂时无法拉取已验真列表（不影响离线或正常游玩）。</div>';
+    }
   }
 }
 
@@ -1483,6 +1550,7 @@ function buildActiveSnapshot(sess) {
     dlvl: lf.dlevel || 1,
     hp: lf.hp != null ? lf.hp : null,
     hpmax: lf.hpmax != null ? lf.hpmax : null,
+    thumb: buildClientAsciiThumb(sess.mapRows, sess.mapColors),
     keysTotal: sess.keysTotal || 0,
     records: sess.records.slice(),
     pendingKeys: sess.pendingKeys.slice(),
@@ -1650,6 +1718,9 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden' && S && !S.over && !S.buffering && !S.tabLocked) {
     saveLocalSnapshot();
     syncActiveToCloud(true);
+  } else if (document.visibilityState === 'visible' && !S) {
+    if ($('setup') && !$('setup').hidden) loadVerifiedLobby(false);
+    else if ($('mygames') && !$('mygames').hidden) refreshMyGamesPage(false);
   }
 });
 window.addEventListener('pagehide', () => {
@@ -1799,70 +1870,133 @@ function updateMyCountBadge(count) {
   }
 }
 
-function renderActiveGameCard(item, uid, fromPage = 'setup') {
-  const card = document.createElement('div');
-  card.className = 'active-game-item';
+function renderActiveGameCard(item, uid, fromPage = 'mygames') {
   const roleZh = (ROLES[item.roleEn] && ROLES[item.roleEn].zh) || item.roleEn || '冒险者';
+  const when = formatRelativeTime(item.updatedAt);
+
+  const card = document.createElement('article');
+  card.className = 'vgame-card clickable';
+  card.title = '点击继续游玩';
+  card.addEventListener('click', () => resumeActiveGameById(uid, item.gameId, false));
+
+  /* Pure-black 35x11 ASCII thumbnail (consistent with finished cards) */
+  const thumbWrap = document.createElement('div');
+  thumbWrap.className = 'vgame-thumb-wrap';
+  const pre = item.thumb ? renderAsciiThumb(item.thumb) : null;
+  if (pre) {
+    thumbWrap.appendChild(pre);
+  } else {
+    const ph = document.createElement('div');
+    ph.className = 'ascii-thumb-placeholder';
+    ph.textContent = `@  #${item.seedSource === 'random' ? '随机' : item.seed}\n${item.playerName || 'fleck'} · ${roleZh}\n点击继续冒险`;
+    thumbWrap.appendChild(ph);
+  }
+
+  const tl = document.createElement('span');
+  tl.className = 'thumb-pill-tl';
+  tl.textContent = item.parentGameId ? '⚡ 进行中分叉' : '▶ 进行中';
+  thumbWrap.appendChild(tl);
+
+  if (item.hp != null && item.hpmax != null) {
+    const tr = document.createElement('span');
+    tr.className = 'thumb-pill-tr';
+    tr.textContent = `HP ${item.hp}/${item.hpmax}`;
+    thumbWrap.appendChild(tr);
+  }
+
+  const br = document.createElement('span');
+  br.className = 'thumb-pill-br';
+  br.textContent = `Dlvl:${item.dlvl || 1} · T:${item.turns || 0}`;
+  thumbWrap.appendChild(br);
+
+  const body = document.createElement('div');
+  body.className = 'vgame-body';
 
   const top = document.createElement('div');
-  top.className = 'ag-top';
+  top.className = 'vgame-top';
   const title = document.createElement('span');
-  title.textContent = `${item.playerName || 'fleck'} · ${roleZh}`;
-  const badge = document.createElement('span');
-  badge.className = 'ag-badge' + (item.parentGameId ? ' fork' : '');
-  badge.textContent = item.parentGameId
-    ? `分叉 · T${item.turns || 0}`
-    : `进行中 · T${item.turns || 0}`;
-  top.append(title, badge);
+  title.textContent = `${roleZh} · ${item.playerName || 'fleck'}`;
+  top.appendChild(title);
+  if (item.parentGameId) {
+    const fb = document.createElement('span');
+    fb.className = 'ag-badge fork';
+    fb.textContent = `⚡ T${item.forkTurn ?? 0}`;
+    top.appendChild(fb);
+  }
+  const seedTag = document.createElement('span');
+  seedTag.className = 'vgame-seed-tag';
+  seedTag.textContent = item.seedSource === 'random' ? '#随机' : `#${item.seed}`;
+  top.appendChild(seedTag);
 
-  const meta = document.createElement('div');
-  meta.className = 'ag-meta';
-  const hpStr = (item.hp != null && item.hpmax != null) ? `HP ${item.hp}/${item.hpmax}` : '';
-  const dlvlStr = item.dlvl ? `Dlvl:${item.dlvl}` : '';
-  const seedStr = item.seedSource === 'random' ? '种子:随机' : `种子:#${item.seed}`;
-  const forkStr = item.parentGameId ? `源:${item.parentGameId}(T${item.forkTurn ?? 0})` : '';
-  const when = item.updatedAt
-    ? new Date(item.updatedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
-    : '';
-  meta.textContent = [dlvlStr, hpStr, seedStr, forkStr, when].filter(Boolean).join(' · ');
+  const subRow = document.createElement('div');
+  subRow.className = 'vgame-subrow';
+  const hint = document.createElement('span');
+  hint.className = 'vgame-reason';
+  hint.textContent = '点击卡片继续游玩';
+  const wh = document.createElement('span');
+  wh.className = 'vgame-when';
+  wh.textContent = when;
+  subRow.append(hint, wh);
 
   const acts = document.createElement('div');
-  acts.className = 'ag-actions';
-
-  const bResume = document.createElement('button');
-  bResume.type = 'button';
-  bResume.className = 'primary';
-  bResume.textContent = '继续游玩';
-  bResume.addEventListener('click', () => resumeActiveGameById(uid, item.gameId, false));
+  acts.className = 'card-corner-actions';
 
   const bWatch = document.createElement('button');
   bWatch.type = 'button';
-  bWatch.textContent = '▶ 回放 / 选回合分叉';
-  bWatch.addEventListener('click', () => watchActiveGameById(uid, item.gameId, fromPage));
-
-  const bFork = document.createElement('button');
-  bFork.type = 'button';
-  bFork.textContent = '⚡ 末尾分叉';
-  bFork.addEventListener('click', () => resumeActiveGameById(uid, item.gameId, true));
+  bWatch.className = 'card-link-act';
+  bWatch.textContent = '▶ 回放';
+  bWatch.addEventListener('click', (e) => {
+    e.stopPropagation();
+    watchActiveGameById(uid, item.gameId, fromPage);
+  });
 
   const bDel = document.createElement('button');
   bDel.type = 'button';
-  bDel.className = 'danger';
-  bDel.textContent = '放弃';
-  bDel.addEventListener('click', async () => {
-    if (!confirm(`确定放弃「${item.playerName || 'fleck'} · ${roleZh}（第 ${item.turns || 0} 回合）」？放弃后将从进行中列表移除。`)) return;
+  bDel.className = 'card-link-act danger';
+  bDel.textContent = '删除';
+  bDel.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (!confirm(`确定删除进行中对局「${roleZh} · ${item.playerName || 'fleck'}（第 ${item.turns || 0} 回合）」？`)) return;
     await idbDeleteGame(uid, item.gameId);
-    try { await cloud.deleteActiveGame(item.gameId); } catch (e) { }
+    try { await cloud.deleteActiveGame(item.gameId); } catch (err) { }
     await refreshActiveGames(true);
-    if ($('mygames') && !$('mygames').hidden) refreshMyGamesPage(false);
+    if ($('mygames') && !$('mygames').hidden) refreshMyGamesPage(true);
   });
 
-  acts.append(bResume, bWatch, bFork, bDel);
-  card.append(top, meta, acts);
+  acts.append(bWatch, bDel);
+  body.append(top, subRow, acts);
+  card.append(thumbWrap, body);
   return card;
 }
 
 let cachedActiveAll = [];
+let lastMyGamesFetchAt = 0;
+let pendingPollTimers = [];
+
+function clearPendingPolls() {
+  for (const t of pendingPollTimers) clearTimeout(t);
+  pendingPollTimers = [];
+}
+
+function schedulePendingPoll(games) {
+  clearPendingPolls();
+  const now = Date.now();
+  const hasFreshPending = (games || []).some((g) => {
+    if (g.status !== 'pending' || g.hiddenByOwner) return false;
+    const ts = g.createdAt ? Date.parse(g.createdAt) : 0;
+    return ts > 0 && (now - ts) < 90000;
+  });
+  if (!hasFreshPending) return;
+  for (const delayMs of [3000, 8000, 18000]) {
+    pendingPollTimers.push(setTimeout(() => {
+      if ($('mygames') && !$('mygames').hidden) {
+        refreshMyGamesPage(true);
+      } else if ($('setup') && !$('setup').hidden) {
+        loadVerifiedLobby(true);
+      }
+    }, delayMs));
+  }
+}
 
 async function fetchMergedActiveGames(uid, forceCloud) {
   const merged = new Map();
@@ -1879,6 +2013,8 @@ async function fetchMergedActiveGames(uid, forceCloud) {
       if (!cur || (meta.turns || 0) > (cur.turns || 0) ||
           ((meta.turns || 0) === (cur.turns || 0) && String(meta.updatedAt || '') > String(cur.updatedAt || ''))) {
         merged.set(gid, { ...meta, _source: 'cloud' });
+      } else if (cur && !cur.thumb && meta.thumb) {
+        cur.thumb = meta.thumb;
       }
     }
   } catch (e) {
@@ -1904,53 +2040,34 @@ function renderActiveListInto(all, uid, listEl, shelvedWrap, shelvedList, shelve
   }
   if (!recent.length) {
     listEl.innerHTML = '<div class="hint">' +
-      (shelved.length ? '近期无进行中对局，下方可展开 30 天前已搁置的对局。' : '暂无进行中对局，开一局试试！') +
+      (shelved.length ? '近期无进行中对局，下方可展开 30 天前已搁置的对局。' : '暂无进行中对局，点右上角「+ 开新局」试试！') +
       '</div>';
   } else {
     for (const item of recent) listEl.appendChild(renderActiveGameCard(item, uid, fromPage));
   }
   if (shelvedWrap && shelvedList && shelvedSum) {
     shelvedWrap.hidden = shelved.length === 0;
-    shelvedSum.textContent = `已搁置对局（${shelved.length} 局 · 超过 30 天未操作，随时可续打或分叉）`;
+    shelvedSum.textContent = `已搁置对局（${shelved.length} 局 · 超过 30 天未操作，随时可续打或回放）`;
     for (const item of shelved) shelvedList.appendChild(renderActiveGameCard(item, uid, fromPage));
   }
 }
 
 async function refreshActiveGames(forceCloud = false) {
   const guestBanner = $('guest-banner');
-  const activeCard = $('active-games-card');
-  const syncHint = $('active-sync-hint');
-
   const user = cloud && cloud.currentUser();
   if (!user) {
     cachedActiveAll = [];
     updateMyCountBadge(0);
     if (guestBanner) guestBanner.hidden = false;
-    if (activeCard) activeCard.hidden = true;
     return [];
   }
   if (guestBanner) guestBanner.hidden = true;
-  if (syncHint) syncHint.textContent = '同步中…';
-
-  const uid = user.uid;
-  const { all, cloudErr } = await fetchMergedActiveGames(uid, forceCloud);
+  const { all } = await fetchMergedActiveGames(user.uid, forceCloud);
   updateMyCountBadge(all.length);
-  if (syncHint) syncHint.textContent = cloudErr ? '云端暂不可达，已显示本机缓存' : '';
-
-  if (activeCard) {
-    activeCard.hidden = all.length === 0;
-    if (all.length) {
-      renderActiveListInto(
-        all, uid,
-        $('active-games-list'), $('shelved-games-wrap'),
-        $('shelved-games-list'), $('shelved-games-summary'), 'setup',
-      );
-    }
-  }
   return all;
 }
 
-async function refreshMyGamesPage(forceCloud = true) {
+async function refreshMyGamesPage(forceCloud = false) {
   const guestBox = $('mygames-guest');
   const contentBox = $('mygames-content');
   const user = cloud && cloud.currentUser();
@@ -1963,7 +2080,8 @@ async function refreshMyGamesPage(forceCloud = true) {
   if (contentBox) contentBox.hidden = false;
 
   const uid = user.uid;
-  const allActive = await refreshActiveGames(forceCloud);
+  const needCloud = forceCloud || (Date.now() - lastMyGamesFetchAt >= 30000);
+  const allActive = await refreshActiveGames(needCloud);
   if ($('my-active-count')) $('my-active-count').textContent = `共 ${allActive.length} 局`;
   renderActiveListInto(
     allActive, uid,
@@ -1973,13 +2091,20 @@ async function refreshMyGamesPage(forceCloud = true) {
 
   const finBox = $('my-finished-list');
   const finCount = $('my-finished-count');
-  if (finBox) finBox.innerHTML = '<div class="hint">加载我的已结束对局…</div>';
+  if (!needCloud && finBox && finBox.children.length > 0 && !finBox.querySelector('.hint')) {
+    return;
+  }
+  if (finBox && !finBox.children.length) {
+    finBox.innerHTML = '<div class="hint">加载我的已结束对局…</div>';
+  }
   try {
     const raw = await cloud.listMyGames(50);
-    const games = raw.map(normalizePlainGame);
+    lastMyGamesFetchAt = Date.now();
+    const games = raw.map(normalizePlainGame).filter((g) => !g.hiddenByOwner);
+    schedulePendingPoll(games);
     if (finCount) finCount.textContent = `共 ${games.length} 局`;
     if (!games.length) {
-      if (finBox) finBox.innerHTML = '<div class="hint">暂无已结束对局。完成一局（通关/死亡/#quit）后会自动出现在这里，支持回放与分叉。</div>';
+      if (finBox) finBox.innerHTML = '<div class="hint">暂无已结束对局。完成一局（通关/死亡/#quit）后会自动出现在这里。</div>';
       return;
     }
     if (finBox) {
@@ -2143,6 +2268,10 @@ async function onAuthChanged(user) {
   if (verifiedGamesCache.length) renderVerifiedGallery();
   if ($('mygames') && !$('mygames').hidden) {
     await refreshMyGamesPage(true);
+  }
+  if (R) {
+    updateReplayCommentAuthUi();
+    renderReplayComments();
   }
   /* Update drawer if currently in game */
   if (S) {
@@ -2493,7 +2622,6 @@ $('btn-guest-signin').addEventListener('click', () => {
     alert('当前环境未连接 Firebase 登录服务。');
   }
 });
-$('btn-refresh-active').addEventListener('click', () => refreshActiveGames(true));
 
 /* Phase 1 UI controls */
 $('msg-wrap').addEventListener('click', () => toggleMsgLog());
@@ -2533,9 +2661,8 @@ $('overlay-close-x').addEventListener('click', () => {
   if (mode === 'menu') sendBytes([27]);
   else sendKey(' ');
 });
-$('btn-refresh-lobby').addEventListener('click', () => loadVerifiedLobby());
 
-/* Phase 2 Gallery filters & search */
+/* Phase 2b Gallery filters, role select, sort, search & +开新局 anchor */
 if ($('lobby-filters')) {
   $('lobby-filters').addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-filter]');
@@ -2547,8 +2674,20 @@ if ($('lobby-filters')) {
     renderVerifiedGallery();
   });
 }
+if ($('lobby-role-filter')) {
+  $('lobby-role-filter').addEventListener('change', () => renderVerifiedGallery());
+}
+if ($('lobby-sort')) {
+  $('lobby-sort').addEventListener('change', () => renderVerifiedGallery());
+}
 if ($('lobby-search')) {
   $('lobby-search').addEventListener('input', () => renderVerifiedGallery());
+}
+if ($('btn-scroll-newgame')) {
+  $('btn-scroll-newgame').addEventListener('click', () => {
+    const target = $('enter-dungeon') || $('start-btn');
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
 }
 
 /* ---------------- Phase 2: YouTube-style Replay Theater + Frame Cache + 1-Click Fork ---------------- */
@@ -2695,6 +2834,10 @@ function renderReplayFrame(idx) {
   if (forkBtn) {
     forkBtn.disabled = false;
     forkBtn.textContent = `⚡ 从第 ${snap.turn} 回合分叉由我来打`;
+  }
+  const turnLbl = $('rep-comment-turn-label');
+  if (turnLbl) {
+    turnLbl.textContent = `📍 关联当前第 ${snap.turn} 回合`;
   }
 }
 
@@ -2900,6 +3043,7 @@ async function openReplay(gameDoc, opts = {}) {
   R = {
     sid,
     fromPage,
+    isSnapshot: !!snapshot,
     game: gameDoc,
     header: null,
     turns: [],
@@ -2912,6 +3056,7 @@ async function openReplay(gameDoc, opts = {}) {
     curMapColors: null,
     msgs: [],
   };
+  loadReplayComments(gameDoc, !!snapshot);
 
   try {
     let records = [];
@@ -3072,12 +3217,166 @@ function forkFromReplay() {
   });
 }
 
+/* ---------------- Phase 2b: Turn-anchored Replay Comments ---------------- */
+let replayCommentsCache = [];
+let lastCommentSentAt = 0;
+
+function updateReplayCommentAuthUi() {
+  const card = $('rep-comments-card');
+  const form = $('rep-comment-form');
+  const guest = $('rep-comment-guest');
+  if (!card || !R) return;
+  const isVerifiedPublic = R.game && R.game.status === 'verified' && !R.isSnapshot;
+  card.hidden = !isVerifiedPublic;
+  if (!isVerifiedPublic) return;
+  const user = cloud && cloud.currentUser();
+  if (form) form.hidden = !user;
+  if (guest) guest.hidden = !!user;
+}
+
+function jumpReplayToTurn(targetTurn) {
+  if (!R || !R.frames.length || R.buffering) return;
+  stopReplayPlayback();
+  let bestIdx = 0;
+  for (let i = 0; i < R.frames.length; i++) {
+    if ((R.frames[i].turn || 0) <= targetTurn) bestIdx = i;
+    else break;
+  }
+  renderReplayFrame(bestIdx);
+  const stage = $('rep-stage');
+  if (stage) stage.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function renderReplayComments() {
+  const list = $('rep-comments-list');
+  const countEl = $('rep-comments-count');
+  if (!list) return;
+  if (countEl) countEl.textContent = replayCommentsCache.length ? `(${replayCommentsCache.length})` : '';
+  if (!replayCommentsCache.length) {
+    list.innerHTML = '<div class="hint">暂无留言，来写下第一条带回合锚点的点评吧！</div>';
+    return;
+  }
+  const me = cloud && cloud.currentUser();
+  const gameOwnerUid = R && R.game ? R.game.uid : null;
+  list.innerHTML = '';
+  for (const c of replayCommentsCache) {
+    const item = document.createElement('div');
+    item.className = 'rep-comment-item';
+
+    const head = document.createElement('div');
+    head.className = 'rep-comment-head';
+
+    const left = document.createElement('span');
+    left.className = 'rep-comment-author';
+    if (c.turn != null && Number.isFinite(c.turn)) {
+      const pill = document.createElement('button');
+      pill.type = 'button';
+      pill.className = 'comment-turn-pill';
+      pill.textContent = `T${c.turn}`;
+      pill.title = `跳转到第 ${c.turn} 回合`;
+      pill.addEventListener('click', () => jumpReplayToTurn(c.turn));
+      left.appendChild(pill);
+    }
+    left.append(document.createTextNode(c.authorName || '冒险者'));
+
+    const right = document.createElement('span');
+    right.className = 'rep-comment-meta';
+    right.append(document.createTextNode(formatRelativeTime(c.createdAt)));
+    if (me && (c.uid === me.uid || (gameOwnerUid && gameOwnerUid === me.uid))) {
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'card-link-act danger';
+      del.textContent = '删除';
+      del.addEventListener('click', async () => {
+        if (!R || !confirm('确定删除这条留言？')) return;
+        try {
+          await cloud.deleteReplayComment(R.game.gameId, c.id);
+          replayCommentsCache = replayCommentsCache.filter((x) => x.id !== c.id);
+          renderReplayComments();
+        } catch (err) {
+          alert('删除留言失败：' + (err && err.message ? err.message : err));
+        }
+      });
+      right.appendChild(del);
+    }
+
+    head.append(left, right);
+    const body = document.createElement('div');
+    body.className = 'rep-comment-text';
+    body.textContent = c.text || '';
+
+    item.append(head, body);
+    list.appendChild(item);
+  }
+}
+
+async function loadReplayComments(gameDoc, isSnapshot) {
+  replayCommentsCache = [];
+  if (R) R.isSnapshot = !!isSnapshot;
+  updateReplayCommentAuthUi();
+  const list = $('rep-comments-list');
+  const countEl = $('rep-comments-count');
+  if (countEl) countEl.textContent = '';
+  if (!list || isSnapshot || !gameDoc || gameDoc.status !== 'verified') return;
+
+  const cfg = globalThis.AIRSTRING_FIREBASE_CONFIG;
+  const project = cfg && cfg.projectId;
+  if (!project || project.startsWith('REPLACE_')) {
+    list.innerHTML = '<div class="hint">本地模式暂不支持留言。</div>';
+    return;
+  }
+  list.innerHTML = '<div class="hint">加载留言中…</div>';
+  try {
+    const url = 'https://firestore.googleapis.com/v1/projects/' +
+      encodeURIComponent(project) + '/databases/(default)/documents/games/' +
+      encodeURIComponent(gameDoc.gameId) + ':runQuery';
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId: 'comments' }],
+          orderBy: [{ field: { fieldPath: 'createdAt' }, direction: 'DESCENDING' }],
+          limit: 30,
+        },
+      }),
+    });
+    if (!r.ok) {
+      if (r.status === 403) {
+        list.innerHTML = '<div class="hint">留言区即将开放（等待后端规则审核生效）。</div>';
+        return;
+      }
+      throw new Error('HTTP ' + r.status);
+    }
+    const rows = await r.json();
+    replayCommentsCache = rows
+      .filter((x) => x.document && x.document.fields)
+      .map((x) => {
+        const f = x.document.fields;
+        return {
+          id: x.document.name.split('/').pop(),
+          uid: fsVal(f.uid) || '',
+          authorName: fsVal(f.authorName) || '冒险者',
+          text: fsVal(f.text) || '',
+          turn: fsVal(f.turn),
+          createdAt: fsVal(f.createdAt) || '',
+        };
+      });
+    renderReplayComments();
+  } catch (e) {
+    list.innerHTML = '<div class="hint">留言暂不可用。</div>';
+  }
+}
+
 /* Top nav & My Games page wiring */
 $('nav-lobby').addEventListener('click', () => showSetup());
-$('nav-mygames').addEventListener('click', () => showMyGames(true));
-$('btn-goto-mygames').addEventListener('click', () => showMyGames(true));
-$('btn-mygames-refresh').addEventListener('click', () => refreshMyGamesPage(true));
-$('btn-mygames-new').addEventListener('click', () => showSetup());
+$('nav-mygames').addEventListener('click', () => showMyGames(false));
+$('btn-mygames-new').addEventListener('click', () => {
+  showSetup().then(() => {
+    const target = $('enter-dungeon') || $('start-btn');
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+});
 $('btn-mygames-signin').addEventListener('click', () => {
   if (cloud && cloud.signIn) {
     cloud.signIn().catch((e) => {
@@ -3086,8 +3385,24 @@ $('btn-mygames-signin').addEventListener('click', () => {
   }
 });
 
-/* Replay controls wiring */
+/* Replay controls & comment form wiring */
 $('btn-rep-back').addEventListener('click', () => closeReplay(true));
+$('btn-rep-sameseed').addEventListener('click', () => {
+  if (!R || !R.game) return;
+  const g = R.game;
+  closeReplay(false);
+  showSetup().then(() => {
+    const givenRadio = document.querySelector('input[name="seedmode"][value="given"]');
+    if (givenRadio) givenRadio.checked = true;
+    if (/^\d+$/.test(String(g.seed))) $('seed-input').value = String(g.seed);
+    if (ROLES[g.roleKey]) {
+      $('opt-role').value = g.roleKey;
+      $('opt-role').dispatchEvent(new Event('change'));
+    }
+    const target = $('enter-dungeon') || $('start-btn');
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+});
 $('btn-rep-share').addEventListener('click', () => {
   const url = location.href;
   if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -3098,6 +3413,35 @@ $('btn-rep-share').addEventListener('click', () => {
     }).catch(() => prompt('复制此回放链接：', url));
   } else {
     prompt('复制此回放链接：', url);
+  }
+});
+$('rep-comment-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!R || !R.game || !cloudActive()) return;
+  const inp = $('rep-comment-input');
+  const text = (inp.value || '').trim();
+  if (!text) return;
+  if (Date.now() - lastCommentSentAt < 5000) {
+    alert('发言太快啦，请 5 秒后再试。');
+    return;
+  }
+  const sendBtn = $('btn-rep-comment-send');
+  const includeTurn = $('rep-comment-turn-chk') && $('rep-comment-turn-chk').checked;
+  const curTurn = (R.frames && R.frames[R.curIdx]) ? (R.frames[R.curIdx].turn || 0) : null;
+  if (sendBtn) sendBtn.disabled = true;
+  try {
+    const created = await cloud.addReplayComment(R.game.gameId, {
+      text,
+      turn: includeTurn ? curTurn : null,
+    });
+    lastCommentSentAt = Date.now();
+    inp.value = '';
+    replayCommentsCache.unshift(created);
+    renderReplayComments();
+  } catch (err) {
+    alert('留言提交失败（若规则刚提交审核请稍后再试）：' + (err && err.message ? err.message : err));
+  } finally {
+    if (sendBtn) sendBtn.disabled = false;
   }
 });
 $('btn-rep-start').addEventListener('click', () => { stopReplayPlayback(); renderReplayFrame(0); });

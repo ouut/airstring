@@ -1702,6 +1702,191 @@ button.act.primary .sub { color: #543b02; }
 .ag-actions { flex-wrap: wrap; }
 .rep-transport { flex-wrap: wrap; }
 
+/* ---------- Phase 2b: Clean clickable cards, extra filters & replay comments ---------- */
+.gallery-tools {
+  flex-wrap: wrap;
+}
+#lobby-role-filter,
+#lobby-sort {
+  background: #0b0e14;
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 5px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+#lobby-role-filter:focus,
+#lobby-sort:focus { outline: none; border-color: var(--accent); }
+
+.vgame-card.clickable {
+  cursor: pointer;
+}
+.vgame-card.clickable:hover {
+  border-color: rgba(229, 181, 76, 0.55);
+  background: #10151f;
+}
+.vgame-seed-tag {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--dim);
+  flex-shrink: 0;
+}
+.vgame-subrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--dim);
+}
+.vgame-subrow .vgame-reason {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.vgame-when {
+  font-family: var(--mono);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.card-corner-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid #161c27;
+  margin-top: 2px;
+}
+.card-link-act {
+  background: none;
+  border: 0;
+  color: var(--dim);
+  font-size: 11.5px;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: 2px;
+}
+.card-link-act:hover {
+  color: var(--fg-bright);
+  background: #18202e;
+}
+.card-link-act.danger:hover {
+  color: #ff8a8a;
+  background: rgba(240, 96, 96, 0.12);
+}
+
+.replay-left-col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.replay-top-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.rep-comments-card h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rep-comment-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+#rep-comment-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: #090c12;
+  color: var(--fg-bright);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: 13px;
+  resize: vertical;
+  min-height: 54px;
+}
+#rep-comment-input:focus { outline: none; border-color: var(--accent); }
+.rep-comment-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.rep-turn-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+}
+.rep-comments-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rep-comment-item {
+  background: #10151e;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 9px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.rep-comment-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+.rep-comment-author {
+  font-weight: 700;
+  color: var(--fg-bright);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.comment-turn-pill {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 2px;
+  background: var(--accent-bg);
+  color: var(--accent);
+  border: 1px solid rgba(229, 181, 76, 0.5);
+  cursor: pointer;
+}
+.comment-turn-pill:hover {
+  background: var(--accent);
+  color: #161002;
+}
+.rep-comment-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--fg);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.rep-comment-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--dim);
+}
+
 /* ---------- Mobile portrait defaults ---------- */
 @media (max-width: 900px) {
   .replay-layout { grid-template-columns: 1fr; }
