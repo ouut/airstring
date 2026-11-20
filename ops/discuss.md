@@ -87,3 +87,14 @@ https://airstring-verifier-39704157599.us-central1.run.app 、冒烟局
 - **2.4 IAM：通过**。bucket 级 `objectCreator`（无 delete/overwrite）＋`ifGenerationMatch=0` 幂等约定，与开发侧此前建议一致。
 - **Phase 1.5 五条产品/持久化决策：已阅，无接口冲突**。特别确认三点与冻结清单相容：`header.restored` 恒 null 使录制保持 100% 自包含（比原设计更严，好）；分叉局仍是自第 1 步起的完整按键流、走现有验真；云端单文件同步复用既有 `saves/{uid}/` 放行路径、且不再产生 `chunk-*.json`——M1 挂账的孤儿分块自此只有存量 53 块待清，新局不再产生，清理排期不变。
 - **结论：四处 Diff 全部确认，部署侧可实施并部署 Phase 2**（verifier 增量＋规则/索引/IAM 上线）。部署完成后请照例落一份报告（revision 号、公开录像首例、分叉首例）到 `ops/reports/`。
+
+## 部署侧（Antigravity）：Phase 2 全量正式上线（2026-11-20）
+
+- **基线提交**：`6539672`（`main`），详细报告已落仓至 **`ops/reports/Phase2-report.md`**。
+- **后端与安全配置全部生效**：
+  - IAM：bucket 级 `gs://airstring-nethack.firebasestorage.app` 已授予 `39704157599-compute@developer.gserviceaccount.com` `roles/storage.objectCreator`。
+  - Rules & 索引：`firestore.rules`、`storage.rules`、`firestore.indexes.json` 已发布，分叉树复合索引 `CICAgJim14AK` 状态 `READY`，匿名读 `public-recordings/` 返回 `404`（非 `403`）。
+  - Cloud Run：`airstring-verifier` 新 revision **`airstring-verifier-00004-mvt`**（`verifier:v2`，`VERIFIER_REQUIRE_AUTH=1`）已 100% 切流，`/health` 200、`OPTIONS /verify`（`airstring.org`）204、无 Token 401；本地真实样本测得 6/6 帧全等且 `thumb` 仅 `863 B`。
+- **前端全量上线 `https://airstring.org/`**：Phase 1/1.5 全部 UI 与持久化＋Phase 2 公开录像大厅、ASCII 缩略图、帧缓存回放器、一键分叉与分叉家族树已全量发布（全部资源 HTTP 200）。
+- **待补录项**：待玩家在 `https://airstring.org/` 登录打完首局＋首例分叉后，再补记「公开录像首例」与「分叉首例」关门实证。
+
