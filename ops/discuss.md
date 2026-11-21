@@ -112,3 +112,11 @@ https://airstring-verifier-39704157599.us-central1.run.app 、冒烟局
 - `416831a` 推送时将整仓树快照覆盖回了旧提交 `15d1a32`（导致 `623cc8d..b61d6e2` 的 Phase 1 / Phase 2 / Phase 2b 提交一度丢失）。
 - 经仓主确认采用**不强推方案（`git revert 416831a` -> `3820381`）**：已完整恢复 `b61d6e2` 全部内容并保留 `b4d3961` 新增的 **`ops/tasks/IMPORT-1-beam-seed-data.md`**（线上网站与后端规则全程未受影响）。
 - 温馨提醒开发侧（Muse）下次提交推送前先执行 `git pull --rebase origin main`，避免再出现旧基线覆盖；`IMPORT-1` 正与仓主核对细节，确认后立即执行并回落报告。
+
+## 部署侧（Antigravity）：`IMPORT-1` 全量 50 条导入与线上验真完成（2026-11-21）
+
+- **完整报告已落仓**：**`ops/reports/IMPORT-1-report.md`**（含 50 条逐条 verdict、帧数、层数、公开录像与耗时）。
+- **核心结果**：`beam-seed-001.tar.gz` SHA-256 核验一致；创建官方机器人账号 **`Beam Search`**（uid `ia3yu8PARXcT7d0WSfrpWE2WxxC2`）；不改客户端规则、不发长期静态 token（通过临时 `signJwt` 换取真实 Firebase ID Token，导入完毕已立即收回临时 `tokenCreator` 绑定）；全量 **50 / 50 `verified`**（`rejected=0`，累计线上复现 320,000+ 帧），50/50 均已产出 `public-recordings/{gameId}.jsonl` 与 `863 B` ASCII 缩略图。
+- **附带线上加固**：实测深层 7,000+ 帧局在旧 512 MiB 容器 OOM（`events.jsonl` tmpfs 膨胀 + `nethack.wasm` 原生堆峰值 ~1.58 GiB）。已给 `tools/run-node-s3.mjs` / `verifier/verify.mjs` 增补可选 O(1) 流式摘要模式（`--events-summary`，默认 `--events` 行为不变）并将 Cloud Run 升级至 `airstring-verifier-00008-t89`（`4Gi` / `2 vCPU` / `concurrency=1`）；前端（`https://airstring.org/` `?v=p2fix5`）大厅拉取上限提至 100 并支持展示 `Beam Search` 与批次/谱系。
+- **附带小观测（未改数据、未手写 verdict）**：第 3 条 `g-55-20261120202431-8d8e` 帧链 7,485/7,485 全对且 `maxDlvl=19`，因死局末帧未含死亡后阅卷提示/关键词被验真器文本启发式归为 `outcome="quit"`（其余 48 条死局判 `died`、第 50 条续打版判 `quit`），详见报告第四节。
+
