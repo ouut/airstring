@@ -25,7 +25,7 @@ import { COMMANDS, DIRS, dirByte } from './commands.js';
  * In every other case `cloud` is null (or reports no user) and the
  * upload path below is the S5 local-stub behaviour, unchanged. */
 let cloud = null;
-try { cloud = (await import('./firebase.js?v=p2fix7')).default; }
+try { cloud = (await import('./firebase.js?v=p2fix8')).default; }
 catch (e) { cloud = null; }
 function cloudActive() { return !!(cloud && cloud.currentUser()); }
 
@@ -912,6 +912,7 @@ function handleEvent(json) {
     case 'message':
       S.messages.push(ev.text);
       if (S.messages.length > 300) S.messages.shift();
+      updateCondTagsFromMsg(ev.text);
       if (/you begin praying|you finish your prayer/i.test(ev.text || '')) {
         S.lastPrayTurn = S.lastFrame ? (S.lastFrame.turn || S.lastFrame.moves || 0) : 0;
         if (!fast) updateNotesPrayStatus();
@@ -939,6 +940,7 @@ function handleEvent(json) {
     case 'raw':
       S.messages.push(ev.text);
       if (S.messages.length > 300) S.messages.shift();
+      updateCondTagsFromMsg(ev.text);
       if (fast) {
         S.logBuffer.push('[!] ' + ev.text);
         if (S.logBuffer.length > 200) S.logBuffer.shift();
@@ -1023,7 +1025,46 @@ function handleEvent(json) {
   if (!fast) renderBar();
 }
 
-/* ---------------- danger guard shield & farlook/travel cursor helpers ---------------- */
+/* ---------------- live condition tag tracker + danger guard shield & cursor helpers ---------------- */
+function updateCondTagsFromMsg(text) {
+  if (!S || !text) return;
+  if (!S.condTags) S.condTags = new Set();
+  const t = String(text);
+  /* Blindness */
+  if (/you can't see|you are blind|everything suddenly goes dark|blinds you|blinding flash/i.test(t)) S.condTags.add('失明');
+  if (/you can see again|vision clears|far-?sighted/i.test(t)) S.condTags.delete('失明');
+  /* Confusion */
+  if (/you feel (somewhat )?confused|feel (somewhat )?dizzy|everything looks so funny|confuses you/i.test(t)) S.condTags.add('混乱');
+  if (/feel less confused|mind clears/i.test(t)) S.condTags.delete('混乱');
+  /* Stunned */
+  if (/you stagger|you reel|you are stunned|stuns you/i.test(t)) S.condTags.add('眩晕');
+  if (/you feel steadier|no longer stunned/i.test(t)) S.condTags.delete('眩晕');
+  /* Hallucination */
+  if (/oh wow|everything looks so cosmic|psychedelic|hallucinat/i.test(t)) S.condTags.add('幻觉');
+  if (/everything looks so boring|reality returns/i.test(t)) S.condTags.delete('幻觉');
+  /* Poison / Illness */
+  if (/food poisoning|deadly poison|you feel (very )?sick|terminally ill/i.test(t)) S.condTags.add('中毒/生病');
+  if (/you feel much better|cured|no longer sick/i.test(t)) S.condTags.delete('中毒/生病');
+  /* Stoning */
+  if (/turning to stone|limbs are stiffening|slowing down.*stone/i.test(t)) S.condTags.add('石化!');
+  if (/feel more limber/i.test(t)) S.condTags.delete('石化!');
+  /* Sliming */
+  if (/turning into.*slime/i.test(t)) S.condTags.add('史莱姆!');
+  if (/feel less slimy/i.test(t)) S.condTags.delete('史莱姆!');
+  /* Held / Trapped */
+  if (/grabs you|holds you|engulfs you|swallows you|bear trap|stuck in a web|fall into a .*pit/i.test(t)) {
+    S.condTags.add('被困/束缚');
+    S.trappedPos = S.heroPos ? `${S.heroPos.x},${S.heroPos.y},${S.lastFrame ? S.lastFrame.dlevel : 0}` : null;
+  }
+  if (/break free|escape|climb out|crawl out|pull free|slip out|releases you|you are free|struggle free/i.test(t)) {
+    S.condTags.delete('被困/束缚');
+    S.trappedPos = null;
+  }
+  /* Levitating */
+  if (/you start to float|you float up/i.test(t)) S.condTags.add('浮空');
+  if (/float gently to the/i.test(t)) S.condTags.delete('浮空');
+}
+
 let dangerLockUntil = 0;
 let dangerClearTimer = null;
 
@@ -1252,8 +1293,26 @@ function renderStatus() {
   if (f.burden > 0) {
     el.append(makeSpan('st-hunger' + (f.burden >= 3 ? ' crit' : ''), BURDEN_ZH[f.burden] || '负重'));
   }
-  if (Array.isArray(f.cond) && f.cond.some((v) => v > 0)) {
-    el.append(makeSpan('st-hunger crit', '⚠ 异常'));
+  const anyCond = Array.isArray(f.cond) && f.cond.some((v) => v > 0);
+  if (!anyCond && S.condTags && S.condTags.size) {
+    /* Clear timed status flags once engine reports all cond slots zero (keep trap/held only until moved) */
+    for (const k of ['失明', '混乱', '眩晕', '幻觉', '中毒/生病', '石化!', '史莱姆!', '浮空']) {
+      S.condTags.delete(k);
+    }
+  }
+  if (S.condTags && S.condTags.has('被困/束缚') && S.trappedPos && S.heroPos) {
+    const curPos = `${S.heroPos.x},${S.heroPos.y},${f.dlevel ?? 0}`;
+    if (curPos !== S.trappedPos) {
+      S.condTags.delete('被困/束缚');
+      S.trappedPos = null;
+    }
+  }
+  if (S.condTags && S.condTags.size) {
+    for (const tag of S.condTags) {
+      el.append(makeSpan('st-hunger crit', '⚠ ' + tag));
+    }
+  } else if (anyCond) {
+    el.append(makeSpan('st-hunger crit', '⚠ 异常(^X)'));
   }
 }
 
@@ -1433,8 +1492,11 @@ function dirPad(selfLabel) {
     b.textContent = isCenter ? (selfLabel || '休 .') : d.label;
     b.setAttribute('aria-label', '方向 ' + d.label);
     b.addEventListener('click', () => {
-      const byte = dirByte(d.dx, d.dy);
-      if (byte) sendKey(byte);
+      const ch = dirByteForSession(d.dx, d.dy);
+      if (ch) {
+        if (S && S.cursorPos) applyCursorByte(ch.charCodeAt(0));
+        sendKey(ch);
+      }
     });
     pad.appendChild(b);
   }
@@ -1459,7 +1521,7 @@ function contextualMainButtons() {
   const door = adj.find((c) => c.ch === '+');
   if (door) {
     btns.push(actBtn('开门', 'o+方向', () => {
-      sendBytes('o' + dirByte(door.dx, door.dy));
+      sendBytes('o' + dirByteForSession(door.dx, door.dy));
     }, true));
   }
   if (under === '<') btns.push(actBtn('上楼', '<', () => sendKey('<'), true));
@@ -4661,6 +4723,17 @@ function formatDumplogText({ meta, mapRows, insp, recentMsgs }) {
   const out = [];
   out.push('airstring · NetHack 3.6.7 Dumplog');
   out.push(hr);
+  if (meta.shareUrl) {
+    out.push(`Replay/Fork : ${meta.shareUrl}`);
+    out.push(
+      '在线回放分叉: 点击上方链接一键直达本局——可免费逐帧观看录像、随时暂停查看全套装备/属性/袋内物品，' +
+      '还可在任意回合点击「分叉」由你接管改写结局，或同种子重开挑战！' +
+      (meta.pendingVerify ? '（刚结束对局将在后台验真完成数秒后公开可访问）' : '')
+    );
+  } else {
+    out.push('在线回放分叉: 本局为游客试玩或本地快照，尚未公开上云；登录 Google 开局即可生成永久公开回放与分叉直达链接（https://airstring.org/）。');
+  }
+  out.push(hr);
   out.push(`Game ID   : ${meta.gameId || '?'}`);
   if (meta.displayName) out.push(`Player    : ${meta.displayName}`);
   out.push(`Options   : ${meta.options || ''}`);
@@ -4703,6 +4776,12 @@ function formatDumplogText({ meta, mapRows, insp, recentMsgs }) {
     out.push('');
   }
   out.push(hr);
+  if (meta.shareUrl) {
+    out.push(`▶ 一键直达本局回放 / 任意回合分叉接管：${meta.shareUrl}`);
+    out.push('▶ 支持逐帧回放、暂停查完整背包/属性/袋内物品、从死前或任意回合分叉继续打、同种子挑战！');
+  } else {
+    out.push('▶ 登录 https://airstring.org/ 开局，每局自动生成永久可分享的回放与分叉直达链接！');
+  }
   out.push('Generated by https://airstring.org/ (deterministic WASM verifiable NetHack 3.6.7)');
   return out.join('\n');
 }
@@ -4824,6 +4903,9 @@ async function openDumplogFromReplay() {
     } catch (_) { insp = null; }
   }
   loading.hidden = true;
+  const shareUrl = (R.game && R.game.gameId && !R.isSnapshot)
+    ? ('https://airstring.org/#replay/' + encodeURIComponent(R.game.gameId))
+    : null;
   activeDumplogText = formatDumplogText({
     meta: {
       gameId: R.game.gameId,
@@ -4838,6 +4920,8 @@ async function openDumplogFromReplay() {
       recordingSha256: R.game.recordingSha256,
       batch: R.game.batch,
       lineageId: R.game.lineageId,
+      shareUrl,
+      pendingVerify: !!(shareUrl && R.game.status !== 'verified'),
     },
     mapRows: lastSnap.mapRows,
     insp,
@@ -4873,15 +4957,22 @@ async function openDumplogFromGame(sess) {
     } catch (_) { insp = null; }
   }
   loading.hidden = true;
+  const shareUrl = (cloudActive() && sess.id && !sess.uploadFailed)
+    ? ('https://airstring.org/#replay/' + encodeURIComponent(sess.id))
+    : null;
+  const displayName = (cloudActive() && cloud.currentUser() && cloud.currentUser().displayName) || '';
   activeDumplogText = formatDumplogText({
     meta: {
       gameId: sess.id,
+      displayName,
       options: sess.options,
       seed: sess.seed,
       seedSource: sess.seedSource,
       turns: sess.lastFrame ? sess.lastFrame.turn : allTurns.length,
       maxDlvl: sess.lastFrame ? sess.lastFrame.dlevel : 1,
       outcome: 'ended',
+      shareUrl,
+      pendingVerify: !!shareUrl,
     },
     mapRows: sess.mapRows,
     insp,
