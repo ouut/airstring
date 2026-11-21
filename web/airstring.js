@@ -25,7 +25,7 @@ import { COMMANDS, DIRS, dirByte } from './commands.js';
  * In every other case `cloud` is null (or reports no user) and the
  * upload path below is the S5 local-stub behaviour, unchanged. */
 let cloud = null;
-try { cloud = (await import('./firebase.js?v=p2fix5')).default; }
+try { cloud = (await import('./firebase.js?v=p2fix6')).default; }
 catch (e) { cloud = null; }
 function cloudActive() { return !!(cloud && cloud.currentUser()); }
 
@@ -1487,6 +1487,19 @@ $('grid').addEventListener('click', (e) => {
 function parseFrame(text) {
   const get = (re) => { const m = re.exec(text); return m ? m[1] : null; };
   const num = (re) => { const v = get(re); return v == null ? null : +v; };
+  const attrStr = get(/^attr=([0-9,\-]+)$/m);
+  const attrs = attrStr ? attrStr.split(',').map((n) => parseInt(n, 10)) : null;
+  const condStr = get(/^cond=([0-9,\-]+)$/m);
+  const cond = condStr ? condStr.split(',').map((n) => parseInt(n, 10)) : null;
+  let invCount = 0;
+  const invIdx = text.indexOf('\n[inventory]\n');
+  if (invIdx >= 0) {
+    const rest = text.slice(invIdx + 13);
+    for (const line of rest.split('\n')) {
+      if (!line || line.startsWith('hash=') || line.startsWith('framehash=') || line === 'end') break;
+      invCount++;
+    }
+  }
   return {
     frame: num(/^frame (\d+)$/m),
     turn: num(/^turn (\d+)$/m),
@@ -1496,8 +1509,13 @@ function parseFrame(text) {
     hp: num(/hp=(-?\d+)/), hpmax: num(/hpmax=(\d+)/),
     pw: num(/pw=(-?\d+)/), pwmax: num(/pwmax=(\d+)/),
     ac: num(/ac=(-?\d+)/), xl: num(/xl=(\d+)/),
+    exp: num(/exp=(\d+)/),
     gold: num(/gold=(\d+)/), hunger: num(/hunger=(-?\d+)/),
-    dlevel: num(/dlevel=(\d+)/), moves: num(/moves=(\d+)/),
+    luck: num(/luck=(-?\d+)/),
+    dnum: num(/dnum=(\d+)/), dlevel: num(/dlevel=(\d+)/),
+    burden: num(/burden=(\d+)/),
+    moves: num(/moves=(\d+)/),
+    attrs, cond, invCount,
   };
 }
 function handleFrame(text) {
@@ -2789,6 +2807,7 @@ function stopReplayPlayback() {
 
 function closeReplay(goBack = true) {
   const fromPage = (R && R.fromPage) || 'setup';
+  closeInspectModal();
   stopReplayPlayback();
   if (R) {
     teardownCurrentSession();
@@ -2871,6 +2890,16 @@ function renderReplayGrid(frameSnap) {
   }
 }
 
+const BURDEN_ZH = ['正常', '负重', '吃力', '过重', '超载', '动弹不得'];
+function hungerLabel(h) {
+  if (h == null) return { text: '未知', crit: false };
+  if (h < 0) return { text: '昏厥', crit: true };
+  if (h < 50) return { text: '虚弱', crit: true };
+  if (h < 150) return { text: '饥饿', crit: false };
+  if (h > 1000) return { text: '饱足', crit: false };
+  return { text: '正常', crit: false };
+}
+
 function renderReplayStatus(frameSnap) {
   const el = $('rep-status');
   const fill = $('rep-hp-fill');
@@ -2893,12 +2922,99 @@ function renderReplayStatus(frameSnap) {
     mk('st-name', (R && R.game.name) || 'fleck'),
     mk('st-role', roleZh),
     mk('st-dlvl', `Dlvl:${frameSnap.dlvl ?? 1}`),
+    mk('', `XL:${frameSnap.xl ?? 1}`),
     mk(hpCls, `HP:${hp}/${hpmax}`),
     mk('st-pw', `Pw:${frameSnap.pw ?? 0}/${frameSnap.pwmax ?? 0}`),
     mk('', `AC:${frameSnap.ac ?? 0}`),
     mk('st-gold', `$:${frameSnap.gold ?? 0}`),
+    mk('', `背包:${frameSnap.invCount ?? 0}`),
     mk('', `T:${frameSnap.turn ?? 0}`),
   );
+  const hl = hungerLabel(frameSnap.hunger);
+  if (hl.text !== '正常' && hl.text !== '未知') {
+    el.append(mk('st-hunger' + (hl.crit ? ' crit' : ''), hl.text));
+  }
+  if (frameSnap.burden > 0) {
+    el.append(mk('st-hunger' + (frameSnap.burden >= 3 ? ' crit' : ''), BURDEN_ZH[frameSnap.burden] || '负重'));
+  }
+  if (Array.isArray(frameSnap.cond) && frameSnap.cond.some((v) => v > 0)) {
+    el.append(mk('st-hunger crit', '⚠ 异常状态'));
+  }
+}
+
+function renderReplayHeroCard(frameSnap) {
+  const attrsBox = $('rep-hero-attrs');
+  const metaBox = $('rep-hero-meta');
+  const turnEl = $('rep-hero-turn');
+  if (!attrsBox || !metaBox || !frameSnap) return;
+  if (turnEl) turnEl.textContent = `T${frameSnap.turn ?? 0}`;
+
+  const names = ['力 Str', '智 Int', '慧 Wis', '敏 Dex', '体 Con', '魅 Cha'];
+  const vals = Array.isArray(frameSnap.attrs) && frameSnap.attrs.length >= 6
+    ? frameSnap.attrs : ['-', '-', '-', '-', '-', '-'];
+  attrsBox.innerHTML = '';
+  for (let i = 0; i < 6; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'rep-attr-cell';
+    const k = document.createElement('span');
+    k.className = 'ak'; k.textContent = names[i].split(' ')[0];
+    cell.title = names[i];
+    const v = document.createElement('span');
+    v.className = 'av'; v.textContent = String(vals[i]);
+    cell.append(k, v);
+    attrsBox.appendChild(cell);
+  }
+
+  metaBox.innerHTML = '';
+  const kv = (k, v) => {
+    const row = document.createElement('div');
+    row.className = 'rep-kv';
+    const ks = document.createElement('span');
+    ks.className = 'k'; ks.textContent = k;
+    const vs = document.createElement('span');
+    vs.className = 'v'; vs.textContent = v;
+    row.append(ks, vs);
+    metaBox.appendChild(row);
+  };
+  const hl = hungerLabel(frameSnap.hunger);
+  const bTxt = BURDEN_ZH[frameSnap.burden || 0] || '正常';
+  const hasCond = Array.isArray(frameSnap.cond) && frameSnap.cond.some((v) => v > 0);
+  kv('等级 / 经验', `XL ${frameSnap.xl ?? 1}（Exp ${frameSnap.exp ?? 0}）`);
+  kv('生命 / 魔力', `HP ${frameSnap.hp ?? 0}/${frameSnap.hpmax ?? 0} · Pw ${frameSnap.pw ?? 0}/${frameSnap.pwmax ?? 0}`);
+  kv('护甲 / 金币', `AC ${frameSnap.ac ?? 0} · $${frameSnap.gold ?? 0}`);
+  kv('饥饿 / 负重', `${hl.text}${frameSnap.hunger != null ? ` (${frameSnap.hunger})` : ''} · ${bTxt}`);
+  kv('背包物品', `${frameSnap.invCount ?? 0} 件（点下方透视详情）`);
+  if (frameSnap.luck != null && frameSnap.luck !== 0) kv('幸运值', String(frameSnap.luck));
+  if (hasCond) kv('异常状态', '⚠ 存在异常（点透视查明细）');
+}
+
+function renderReplayMsgLog() {
+  const box = $('rep-msglog');
+  const toggle = $('rep-msg-toggle');
+  if (!box || !R) return;
+  if (toggle) toggle.textContent = R.msgLogOpen ? '日志 ▴' : '日志 ▾';
+  box.hidden = !R.msgLogOpen;
+  if (!R.msgLogOpen) return;
+  const curTurn = (R.frames && R.frames[R.curIdx]) ? (R.frames[R.curIdx].turn || 0) : 0;
+  const upto = (R.allMsgs || []).filter((m) => m.turn <= curTurn);
+  const slice = upto.slice(-120);
+  box.innerHTML = '';
+  if (!slice.length) {
+    box.innerHTML = '<div class="hint">截至当前回合暂无消息记录。</div>';
+    return;
+  }
+  for (const m of slice) {
+    const row = document.createElement('div');
+    row.className = 'rep-msglog-row' + (m.turn === curTurn ? ' cur' : '');
+    const ts = document.createElement('span');
+    ts.className = 'rep-msglog-turn';
+    ts.textContent = `T${m.turn}`;
+    const txt = document.createElement('span');
+    txt.textContent = m.text;
+    row.append(ts, txt);
+    box.appendChild(row);
+  }
+  box.scrollTop = box.scrollHeight;
 }
 
 function renderReplayFrame(idx) {
@@ -2910,6 +3026,8 @@ function renderReplayFrame(idx) {
   $('rep-msg').textContent = snap.msgCur || '';
   renderReplayGrid(snap);
   renderReplayStatus(snap);
+  renderReplayHeroCard(snap);
+  renderReplayMsgLog();
 
   const seek = $('rep-seek');
   if (seek) {
@@ -2923,6 +3041,13 @@ function renderReplayFrame(idx) {
     forkBtn.disabled = false;
     forkBtn.textContent = `⚡ 从第 ${snap.turn} 回合分叉由我来打`;
   }
+  const inspBtn = $('btn-rep-inspect');
+  if (inspBtn) {
+    inspBtn.disabled = false;
+    inspBtn.textContent = `🔍 透视第 ${snap.turn} 回合`;
+  }
+  const inspSide = $('btn-rep-inspect-side');
+  if (inspSide) inspSide.disabled = false;
   const turnLbl = $('rep-comment-turn-label');
   if (turnLbl) {
     turnLbl.textContent = `📍 关联当前第 ${snap.turn} 回合`;
@@ -3129,6 +3254,10 @@ async function openReplay(gameDoc, opts = {}) {
   $('btn-rep-back').textContent = fromPage === 'mygames' ? '← 返回对局' : '← 返回大厅';
   $('btn-rep-share').hidden = !gameDoc.publicRecordingPath;
   $('btn-rep-fork').disabled = true;
+  if ($('btn-rep-inspect')) $('btn-rep-inspect').disabled = true;
+  if ($('btn-rep-inspect-side')) $('btn-rep-inspect-side').disabled = true;
+  if ($('rep-msglog')) $('rep-msglog').hidden = true;
+  if ($('rep-msg-toggle')) $('rep-msg-toggle').textContent = '日志 ▾';
   $('rep-seek').value = '0';
   $('rep-seek').max = '0';
   $('rep-time').textContent = '缓冲中…';
@@ -3155,6 +3284,10 @@ async function openReplay(gameDoc, opts = {}) {
     curMapRows: null,
     curMapColors: null,
     msgs: [],
+    pendingMsgs: [],
+    allMsgs: [],
+    msgLogOpen: false,
+    inspectCache: new Map(),
   };
   loadReplayComments(gameDoc, !!snapshot);
 
@@ -3209,7 +3342,7 @@ async function openReplay(gameDoc, opts = {}) {
 
     function pumpReplayKeys() {
       let off = 0;
-      const CHUNK = 48;
+      const CHUNK = 192;
       function step() {
         if (!R || R.sid !== sid || !R.buffering) return;
         const q = globalThis.__airstring_key_queue;
@@ -3242,8 +3375,8 @@ async function openReplay(gameDoc, opts = {}) {
       date: header.date || FIXED_DATE,
       options: header.options,
       mode: 'async',
-      exportPath: '/fleck.frames',
-      rngPath: '/fleck.rng',
+      exportPath: '/dev/null',
+      rngPath: '/dev/null',
     };
     globalThis.__airstring_key_queue = { bytes: [], pos: 0, closed: false };
     globalThis.__airstring_event = (json) => {
@@ -3258,19 +3391,33 @@ async function openReplay(gameDoc, opts = {}) {
         R.curMapColors = Array.isArray(ev.colors)
           ? ev.colors.map((r) => (Array.isArray(r) ? r.slice() : [])) : null;
       } else if ((ev.t === 'message' || ev.t === 'raw') && ev.text) {
-        R.msgs.push(ev.text);
-        if (R.msgs.length > 20) R.msgs.shift();
+        const clean = String(ev.text).trim();
+        if (clean) {
+          R.msgs.push(clean);
+          if (R.msgs.length > 20) R.msgs.shift();
+          R.pendingMsgs.push(clean);
+        }
       }
     };
     globalThis.__airstring_frame = (frameText) => {
       if (!R || R.sid !== sid) return;
       const pf = parseFrame(frameText);
+      const tVal = pf.turn ?? (R.frames.length + 1);
+      if (R.pendingMsgs.length) {
+        for (const txt of R.pendingMsgs) {
+          R.allMsgs.push({ turn: tVal, text: txt });
+        }
+        R.pendingMsgs.length = 0;
+      }
       const len = R.msgs.length;
       R.frames.push({
-        turn: pf.turn ?? (R.frames.length + 1),
+        turn: tVal,
         frame: pf.frame ?? R.frames.length,
         hp: pf.hp, hpmax: pf.hpmax, pw: pf.pw, pwmax: pf.pwmax,
-        ac: pf.ac, xl: pf.xl, gold: pf.gold, dlvl: pf.dlevel,
+        ac: pf.ac, xl: pf.xl, exp: pf.exp, gold: pf.gold,
+        hunger: pf.hunger, luck: pf.luck, dnum: pf.dnum,
+        dlvl: pf.dlevel, burden: pf.burden,
+        attrs: pf.attrs, cond: pf.cond, invCount: pf.invCount,
         mapRows: R.curMapRows ? R.curMapRows.slice() : null,
         mapColors: R.curMapColors ? R.curMapColors.map((r) => r.slice()) : null,
         msgPrev: len >= 2 ? R.msgs[len - 2] : '',
@@ -3292,8 +3439,473 @@ async function openReplay(gameDoc, opts = {}) {
   }
 }
 
+/* ---------------- Read-Only Sandbox Character Inspector (Zero-Fork) ---------------- */
+let inspectToken = 0;
+let activeSandbox = null; /* { token, turn, alive, onEvent, busy } */
+let activeInspectData = null;
+let activeInspectTab = 'inv';
+
+function closeInspectModal() {
+  inspectToken++;
+  if (activeSandbox) {
+    activeSandbox.alive = false;
+    activeSandbox.onEvent = null;
+    if (typeof globalThis.__airstring_close_keys === 'function') {
+      try { globalThis.__airstring_close_keys(); } catch (e) { }
+    }
+    activeSandbox = null;
+  }
+  const modal = $('rep-inspect-modal');
+  if (modal) modal.hidden = true;
+}
+
+function isContainerItemText(txt) {
+  return /\b(bag of holding|bag of tricks|oilskin sack|sack|chest|large box|ice box)\b/i.test(String(txt || ''));
+}
+
+function renderInspectorContent() {
+  const box = $('rep-insp-content');
+  if (!box || !activeInspectData) return;
+  const tabsEl = $('rep-insp-tabs');
+  if (tabsEl) {
+    for (const b of tabsEl.querySelectorAll('button[data-tab]')) {
+      b.classList.toggle('active', b.dataset.tab === activeInspectTab);
+    }
+  }
+  box.innerHTML = '';
+
+  if (activeInspectTab === 'inv') {
+    const items = activeInspectData.inv || [];
+    if (!items.length) {
+      box.innerHTML = '<div class="hint">背包为空或未能读取背包列表。</div>';
+      return;
+    }
+    for (const it of items) {
+      const txt = String(it.text || '');
+      if (!it.sel && !it.pickable) {
+        const hdr = document.createElement('div');
+        hdr.className = 'insp-cat';
+        hdr.textContent = txt;
+        box.appendChild(hdr);
+        continue;
+      }
+      const wrap = document.createElement('div');
+      const cls = ['insp-item'];
+      if (/\(being worn|\(weapon in hand|\(alternate weapon|\(on (left|right) hand|\(wielded/i.test(txt)) cls.push('worn');
+      else if (/\bblessed\b/i.test(txt)) cls.push('blessed');
+      else if (/\bcursed\b/i.test(txt)) cls.push('cursed');
+      wrap.className = cls.join(' ');
+
+      const row = document.createElement('div');
+      row.className = 'insp-item-row';
+      const main = document.createElement('div');
+      main.className = 'insp-item-main';
+      if (it.sel) {
+        const sel = document.createElement('span');
+        sel.className = 'insp-sel';
+        sel.textContent = it.sel + ' -';
+        main.appendChild(sel);
+      }
+      const sp = document.createElement('span');
+      sp.className = 'insp-item-txt';
+      sp.textContent = txt;
+      main.appendChild(sp);
+      row.appendChild(main);
+
+      let bagBox = null;
+      if (it.sel && isContainerItemText(txt)) {
+        const bBtn = document.createElement('button');
+        bBtn.type = 'button';
+        bBtn.className = 'insp-bag-btn';
+        const cachedBag = activeInspectData.bags && activeInspectData.bags[it.sel];
+        bBtn.textContent = cachedBag ? '🎒 已展开' : '🎒 查看袋内';
+        bagBox = document.createElement('div');
+        bagBox.className = 'insp-bag-contents';
+        bagBox.hidden = !cachedBag;
+        if (cachedBag) fillBagContentsBox(bagBox, cachedBag);
+
+        bBtn.addEventListener('click', async () => {
+          if (activeInspectData.bags && activeInspectData.bags[it.sel]) {
+            bagBox.hidden = !bagBox.hidden;
+            bBtn.textContent = bagBox.hidden ? '🎒 查看袋内' : '🎒 收起袋内';
+            return;
+          }
+          bBtn.disabled = true;
+          bBtn.textContent = '读取中…';
+          try {
+            const res = await peekBagInSandbox(it.sel);
+            if (!activeInspectData.bags) activeInspectData.bags = {};
+            activeInspectData.bags[it.sel] = res;
+            fillBagContentsBox(bagBox, res);
+            bagBox.hidden = false;
+            bBtn.textContent = '🎒 收起袋内';
+          } catch (err) {
+            bagBox.hidden = false;
+            bagBox.textContent = '读取袋内失败：' + (err && err.message ? err.message : err);
+            bBtn.textContent = '🎒 重试';
+          } finally {
+            bBtn.disabled = false;
+          }
+        });
+        row.appendChild(bBtn);
+      }
+      wrap.appendChild(row);
+      if (bagBox) wrap.appendChild(bagBox);
+      box.appendChild(wrap);
+    }
+    return;
+  }
+
+  const lines = activeInspectTab === 'attrs' ? (activeInspectData.attrs || [])
+    : activeInspectTab === 'disc' ? (activeInspectData.disc || [])
+    : (activeInspectData.overview || []);
+  if (!lines.length) {
+    box.innerHTML = '<div class="hint">本回合该面板无记录内容。</div>';
+    return;
+  }
+  for (const l of lines) {
+    const div = document.createElement('div');
+    const txt = String(l.text || '');
+    const isHdr = l.hdr || (!txt.startsWith(' ') && txt.endsWith(':'));
+    div.className = 'insp-plain-line' + (isHdr ? ' hdr' : '');
+    div.textContent = txt || '\u00a0';
+    box.appendChild(div);
+  }
+}
+
+function fillBagContentsBox(el, bagRes) {
+  el.innerHTML = '';
+  if (bagRes.items && bagRes.items.length) {
+    for (const it of bagRes.items) {
+      const d = document.createElement('div');
+      d.textContent = (it.sel ? `${it.sel} - ` : '') + (it.text || '');
+      if (!it.sel && !it.pickable) d.style.color = 'var(--accent)';
+      el.appendChild(d);
+    }
+  } else if (bagRes.messages && bagRes.messages.length) {
+    el.textContent = bagRes.messages.join(' / ');
+  } else {
+    el.textContent = '（袋子为空或无法直接打开）';
+  }
+}
+
+function runSandboxCmd(sb, bytes, opts = {}) {
+  return new Promise((resolve) => {
+    const items = [];
+    const lines = [];
+    const messages = [];
+    let settleTimer = null;
+    let hardTimer = null;
+    let done = false;
+    let sawContent = false;
+    const seenPages = new Set();
+
+    const finish = () => {
+      if (done) return;
+      done = true;
+      if (settleTimer) clearTimeout(settleTimer);
+      if (hardTimer) clearTimeout(hardTimer);
+      if (sb.onEvent === handler) sb.onEvent = null;
+      resolve({ items, lines, messages });
+    };
+    const bumpSettle = (ms = 130) => {
+      if (settleTimer) clearTimeout(settleTimer);
+      settleTimer = setTimeout(() => {
+        const q = globalThis.__airstring_key_queue;
+        if (q && q.pos < q.bytes.length) { bumpSettle(60); return; }
+        finish();
+      }, ms);
+    };
+
+    const handler = (ev) => {
+      if (!sb.alive || done) return;
+      if (ev.t === 'menu' && Array.isArray(ev.items)) {
+        if (opts.bagMode) {
+          const takeOut = ev.items.find((x) => x.sel && /take something out/i.test(x.text || ''));
+          if (takeOut && !sawContent) {
+            globalThis.__airstring_push_keys([takeOut.sel.charCodeAt(0)]);
+            bumpSettle(260);
+            return;
+          }
+        }
+        sawContent = true;
+        const pKey = `m:${ev.win}:${ev.page}:${ev.pages}:${ev.items.length}`;
+        if (!seenPages.has(pKey)) {
+          seenPages.add(pKey);
+          for (const it of ev.items) items.push(it);
+        }
+        if (typeof ev.page === 'number' && typeof ev.pages === 'number' && ev.page + 1 < ev.pages) {
+          globalThis.__airstring_push_keys([32]); /* space for next page */
+          bumpSettle(240);
+        } else {
+          globalThis.__airstring_push_keys([27]); /* Esc to close menu */
+          bumpSettle(120);
+        }
+      } else if (ev.t === 'text' && Array.isArray(ev.lines)) {
+        sawContent = true;
+        for (const l of ev.lines) {
+          const txt = typeof l === 'string' ? l : (l && l.text) || '';
+          const hdr = !!(l && l.attr && l.attr > 0);
+          lines.push({ text: txt, hdr });
+        }
+        globalThis.__airstring_push_keys([32]); /* advance/dismiss text pager */
+        bumpSettle(180);
+      } else if (ev.t === 'yn') {
+        const qText = String(ev.question || '');
+        if (opts.bagMode) {
+          if (/take something out|look inside/i.test(qText)) {
+            globalThis.__airstring_push_keys([121]); /* 'y' */
+            bumpSettle(260);
+          } else {
+            globalThis.__airstring_push_keys([110]); /* 'n' */
+            bumpSettle(140);
+          }
+        } else {
+          globalThis.__airstring_push_keys([27]);
+          bumpSettle(120);
+        }
+      } else if (ev.t === 'more') {
+        globalThis.__airstring_push_keys([32]);
+        bumpSettle(180);
+      } else if ((ev.t === 'message' || ev.t === 'raw') && ev.text) {
+        const txt = String(ev.text).trim();
+        if (txt && txt !== '#') messages.push(txt);
+        if (sawContent || opts.bagMode) bumpSettle(160);
+      }
+    };
+
+    sb.onEvent = handler;
+    hardTimer = setTimeout(() => {
+      try { globalThis.__airstring_push_keys([27, 27]); } catch (_) { }
+      finish();
+    }, opts.timeoutMs || 2200);
+    globalThis.__airstring_push_keys(bytes);
+    bumpSettle(opts.initialWaitMs || 350);
+  });
+}
+
+async function ensureSandboxAtTurn(targetTurn, myTok) {
+  if (activeSandbox && activeSandbox.alive && activeSandbox.turn === targetTurn) {
+    return activeSandbox;
+  }
+  if (activeSandbox) {
+    activeSandbox.alive = false;
+    activeSandbox.onEvent = null;
+    if (typeof globalThis.__airstring_close_keys === 'function') {
+      try { globalThis.__airstring_close_keys(); } catch (_) { }
+    }
+    activeSandbox = null;
+  }
+  const sliced = R.turns.filter((t) => (t.turn || 0) <= targetTurn);
+  const prefixBytes = concatReplayBytes(sliced, null);
+  const totalTarget = Math.max(1, sliced.length);
+
+  return new Promise(async (resolve, reject) => {
+    const sb = { token: myTok, turn: targetTurn, alive: true, onEvent: null, busy: false, dead: false };
+    activeSandbox = sb;
+    let framesSeen = 0;
+    let pumpStarted = false;
+    let settled = false;
+
+    const failDead = () => {
+      if (settled) return;
+      settled = true;
+      sb.alive = false;
+      sb.dead = true;
+      reject(new Error('GAME_OVER_AT_TURN'));
+    };
+
+    function pumpPrefix() {
+      let off = 0;
+      const CHUNK = 256;
+      function step() {
+        if (!sb.alive || inspectToken !== myTok) return;
+        const q = globalThis.__airstring_key_queue;
+        if (q && q.pos < q.bytes.length) { setTimeout(step, 4); return; }
+        if (off < prefixBytes.length) {
+          const end = Math.min(off + CHUNK, prefixBytes.length);
+          globalThis.__airstring_push_keys(prefixBytes.subarray(off, end));
+          off = end;
+          const pct = Math.min(92, Math.max(5, Math.round((framesSeen / totalTarget) * 90)));
+          if ($('rep-insp-bar')) $('rep-insp-bar').style.width = pct + '%';
+          if ($('rep-insp-status')) {
+            $('rep-insp-status').textContent = `只读沙盒快进中：${framesSeen} / ${totalTarget} 回合（${pct}%）`;
+          }
+          setTimeout(step, 0);
+          return;
+        }
+        setTimeout(() => {
+          if (!sb.alive || inspectToken !== myTok || settled) return;
+          const q2 = globalThis.__airstring_key_queue;
+          if (q2 && q2.pos < q2.bytes.length) { setTimeout(step, 4); return; }
+          settled = true;
+          resolve(sb);
+        }, 70);
+      }
+      step();
+    }
+
+    globalThis.__airstring_config = {
+      seed: String(R.header.seed),
+      date: R.header.date || FIXED_DATE,
+      options: R.header.options,
+      mode: 'async',
+      exportPath: '/dev/null',
+      rngPath: '/dev/null',
+    };
+    globalThis.__airstring_key_queue = { bytes: [], pos: 0, closed: false };
+    globalThis.__airstring_event = (json) => {
+      if (!sb.alive || inspectToken !== myTok) return;
+      let ev;
+      try { ev = JSON.parse(json); } catch (_) { return; }
+      if (ev.t === 'init' && !pumpStarted) {
+        pumpStarted = true;
+        pumpPrefix();
+      } else if (sb.onEvent) {
+        sb.onEvent(ev);
+      }
+    };
+    globalThis.__airstring_frame = () => {
+      if (!sb.alive || inspectToken !== myTok) return;
+      framesSeen++;
+    };
+    globalThis.__airstring_rngline = () => { };
+    globalThis.__airstring_game_over = () => {
+      if (inspectToken === myTok) failDead();
+    };
+
+    try {
+      const { default: createModule } = await import('./nethack.js');
+      createModule({ print: () => { }, printErr: () => { } }).catch(() => { });
+    } catch (e) {
+      if (!settled) { settled = true; reject(e); }
+    }
+  });
+}
+
+async function peekBagInSandbox(letter) {
+  if (!R || !activeInspectData) throw new Error('未打开透视会话');
+  const myTok = inspectToken;
+  const targetTurn = activeInspectData.turn;
+  const sb = await ensureSandboxAtTurn(targetTurn, myTok);
+  if (inspectToken !== myTok || !sb.alive) throw new Error('透视已取消');
+  if (sb.busy) throw new Error('正在执行另一项查询，请稍候');
+  sb.busy = true;
+  try {
+    const res = await runSandboxCmd(sb, [97, letter.charCodeAt(0)], { bagMode: true, timeoutMs: 2500 });
+    /* Cleanly exit any lingering bag menu */
+    await new Promise((r) => setTimeout(r, 40));
+    try { globalThis.__airstring_push_keys([27, 27]); } catch (_) { }
+    return res;
+  } finally {
+    sb.busy = false;
+  }
+}
+
+async function openReplayInspector() {
+  if (!R || R.buffering || !R.frames.length || !R.header) return;
+  stopReplayPlayback();
+  const snap = R.frames[R.curIdx];
+  const targetTurn = snap.turn || (R.curIdx + 1);
+  const myTok = ++inspectToken;
+
+  const modal = $('rep-inspect-modal');
+  const loading = $('rep-insp-loading');
+  const errBox = $('rep-insp-error');
+  const body = $('rep-insp-body');
+  if (!modal) return;
+
+  $('rep-insp-title').textContent = `🔍 第 ${targetTurn} 回合 · 角色深度透视（只读免分叉）`;
+  modal.hidden = false;
+  errBox.hidden = true;
+  errBox.innerHTML = '';
+
+  const cached = R.inspectCache && R.inspectCache.get(targetTurn);
+  if (cached) {
+    activeInspectData = cached;
+    activeInspectTab = 'inv';
+    loading.hidden = true;
+    body.hidden = false;
+    renderInspectorContent();
+    return;
+  }
+
+  body.hidden = true;
+  loading.hidden = false;
+  $('rep-insp-bar').style.width = '4%';
+  $('rep-insp-status').textContent = `启动只读沙盒，准备快进至第 ${targetTurn} 回合…`;
+
+  try {
+    const sb = await ensureSandboxAtTurn(targetTurn, myTok);
+    if (inspectToken !== myTok || !sb.alive) return;
+
+    $('rep-insp-bar').style.width = '94%';
+    $('rep-insp-status').textContent = '读取背包 (i)、属性 (^X)、图鉴 (\\) 与地牢总览 (#overview)…';
+
+    const invRes = await runSandboxCmd(sb, [105]);
+    if (inspectToken !== myTok) return;
+    const attrRes = await runSandboxCmd(sb, [24]);
+    if (inspectToken !== myTok) return;
+    const discRes = await runSandboxCmd(sb, [92]);
+    if (inspectToken !== myTok) return;
+    const ovBytes = Array.from('#overview\n').map((c) => c.charCodeAt(0));
+    const ovRes = await runSandboxCmd(sb, ovBytes);
+    if (inspectToken !== myTok) return;
+
+    const attrLines = attrRes.items.length
+      ? attrRes.items.map((x) => ({ text: x.text || '', hdr: !x.sel && String(x.text || '').endsWith(':') }))
+      : attrRes.lines;
+    const discLines = discRes.lines.length
+      ? discRes.lines
+      : discRes.items.map((x) => ({ text: (x.sel ? `${x.sel} - ` : '') + (x.text || ''), hdr: !x.sel && !x.pickable }));
+    const ovLines = ovRes.lines.length
+      ? ovRes.lines
+      : ovRes.items.map((x) => ({ text: x.text || '', hdr: !x.sel && !x.pickable }));
+
+    const result = {
+      turn: targetTurn,
+      inv: invRes.items,
+      attrs: attrLines,
+      disc: discLines,
+      overview: ovLines,
+      bags: {},
+    };
+    R.inspectCache.set(targetTurn, result);
+    activeInspectData = result;
+    activeInspectTab = 'inv';
+    $('rep-insp-bar').style.width = '100%';
+    loading.hidden = true;
+    body.hidden = false;
+    renderInspectorContent();
+  } catch (e) {
+    if (inspectToken !== myTok) return;
+    loading.hidden = true;
+    body.hidden = true;
+    errBox.hidden = false;
+    const isDead = e && e.message === 'GAME_OVER_AT_TURN';
+    const p = document.createElement('div');
+    p.textContent = isDead
+      ? `第 ${targetTurn} 回合已是本局终局/阵亡点，引擎已结束无法再查菜单。可以后退 1 回合查看终局前的完整背包与属性！`
+      : `透视失败：${e && e.message ? e.message : e}`;
+    errBox.appendChild(p);
+    if (isDead && R && R.curIdx > 0) {
+      const bPrev = document.createElement('button');
+      bPrev.type = 'button';
+      bPrev.className = 'mini-btn primary-mini';
+      bPrev.textContent = '← 后退 1 回合并重新透视';
+      bPrev.addEventListener('click', () => {
+        closeInspectModal();
+        renderReplayFrame(R.curIdx - 1);
+        openReplayInspector();
+      });
+      errBox.appendChild(bPrev);
+    }
+  }
+}
+
 function forkFromReplay() {
   if (!R || !R.frames.length || !R.header) return;
+  closeInspectModal();
   const snap = R.frames[R.curIdx];
   const targetTurn = snap.turn || (R.curIdx + 1);
   const sliced = R.turns.filter((t) => (t.turn || 0) <= targetTurn);
@@ -3550,9 +4162,37 @@ $('rep-seek').addEventListener('input', (e) => {
   renderReplayFrame(parseInt(e.target.value, 10) || 0);
 });
 $('btn-rep-fork').addEventListener('click', () => forkFromReplay());
+if ($('btn-rep-inspect')) $('btn-rep-inspect').addEventListener('click', () => openReplayInspector());
+if ($('btn-rep-inspect-side')) $('btn-rep-inspect-side').addEventListener('click', () => openReplayInspector());
+if ($('btn-rep-insp-close')) $('btn-rep-insp-close').addEventListener('click', () => closeInspectModal());
+if ($('btn-rep-insp-cancel')) $('btn-rep-insp-cancel').addEventListener('click', () => closeInspectModal());
+if ($('rep-insp-backdrop')) $('rep-insp-backdrop').addEventListener('click', () => closeInspectModal());
+if ($('rep-insp-tabs')) {
+  $('rep-insp-tabs').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-tab]');
+    if (!btn) return;
+    activeInspectTab = btn.dataset.tab || 'inv';
+    renderInspectorContent();
+  });
+}
+if ($('rep-msg-wrap')) {
+  $('rep-msg-wrap').addEventListener('click', () => {
+    if (!R) return;
+    R.msgLogOpen = !R.msgLogOpen;
+    renderReplayMsgLog();
+  });
+}
 
 document.addEventListener('keydown', (e) => {
   if (!R || $('replay').hidden) return;
+  const inspOpen = $('rep-inspect-modal') && !$('rep-inspect-modal').hidden;
+  if (inspOpen) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeInspectModal();
+    }
+    return;
+  }
   const t = e.target;
   if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return;
   if (e.key === ' ') {

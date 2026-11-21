@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="airstring">
 <link rel="manifest" href="./manifest.json">
 <title>airstring · NetHack</title>
-<link rel="stylesheet" href="./airstring.css?v=p2fix5">
+<link rel="stylesheet" href="./airstring.css?v=p2fix6">
 </head>
 <body>
 <header id="topbar">
@@ -260,10 +260,14 @@
   <div class="replay-layout">
     <div class="replay-left-col">
       <section class="replay-main">
-        <div class="rep-msg-wrap">
-          <div id="rep-msg-prev"></div>
-          <div id="rep-msg"></div>
+        <div id="rep-msg-wrap" class="rep-msg-wrap clickable" role="button" tabindex="0" title="点击展开/收起本局消息历史">
+          <div class="rep-msg-lines">
+            <div id="rep-msg-prev"></div>
+            <div id="rep-msg"></div>
+          </div>
+          <span id="rep-msg-toggle" class="rep-msg-toggle">日志 ▾</span>
         </div>
+        <div id="rep-msglog" class="rep-msglog" hidden></div>
 
         <div id="rep-stage">
           <div id="rep-grid" role="img" aria-label="回放地图"></div>
@@ -303,7 +307,10 @@
                 <option value="8">8x</option>
               </select>
             </div>
-            <button id="btn-rep-fork" type="button" class="fork-cta">⚡ 从当前回合分叉由我来打</button>
+            <div class="rep-cta-group">
+              <button id="btn-rep-inspect" type="button" class="inspect-cta" disabled title="无需分叉，在只读沙盒中查看本回合完整背包、装备、抗性、图鉴、地牢总览与袋内物品">🔍 透视角色</button>
+              <button id="btn-rep-fork" type="button" class="fork-cta">⚡ 从当前回合分叉由我来打</button>
+            </div>
           </div>
         </div>
       </section>
@@ -331,6 +338,12 @@
     </div>
 
     <aside class="replay-side">
+      <div id="rep-hero-card" class="rep-card">
+        <h3>角色实况 <span id="rep-hero-turn" class="hint"></span></h3>
+        <div id="rep-hero-attrs" class="rep-attrs-grid"></div>
+        <div id="rep-hero-meta" class="rep-passport"></div>
+        <button id="btn-rep-inspect-side" type="button" class="mini-btn primary-mini rep-inspect-fullbtn" disabled>🔍 透视完整背包 / 抗性 / 图鉴 / 袋子（免分叉）</button>
+      </div>
       <div class="rep-card">
         <h3>验真护照</h3>
         <div id="rep-passport" class="rep-passport"></div>
@@ -342,6 +355,36 @@
         </div>
       </div>
     </aside>
+  </div>
+
+  <!-- Read-only Sandbox Character Inspector Modal (zero-fork full inspection) -->
+  <div id="rep-inspect-modal" class="insp-modal" hidden>
+    <div id="rep-insp-backdrop" class="insp-backdrop"></div>
+    <div class="insp-dialog" role="dialog" aria-modal="true" aria-labelledby="rep-insp-title">
+      <div class="insp-head">
+        <h3 id="rep-insp-title">🔍 角色深度透视（只读免分叉）</h3>
+        <button id="btn-rep-insp-close" type="button" class="mini-btn">关闭 (Esc)</button>
+      </div>
+      <div id="rep-insp-loading" class="insp-loading" hidden>
+        <div class="buffer-track"><div id="rep-insp-bar"></div></div>
+        <div id="rep-insp-status" class="buffer-detail">只读沙盒准备中…</div>
+        <div class="buffer-sub">在内存沙盒中快进至当前回合执行原生只读查询（不会产生分叉对局或存档）</div>
+        <button id="btn-rep-insp-cancel" type="button" class="mini-btn">取消</button>
+      </div>
+      <div id="rep-insp-error" class="insp-error" hidden></div>
+      <div id="rep-insp-body" class="insp-body" hidden>
+        <div id="rep-insp-tabs" class="insp-tabs" role="tablist">
+          <button type="button" class="insp-tab active" data-tab="inv">背包与装备 (i)</button>
+          <button type="button" class="insp-tab" data-tab="attrs">属性与状态 (^X)</button>
+          <button type="button" class="insp-tab" data-tab="disc">已鉴定图鉴 (\)</button>
+          <button type="button" class="insp-tab" data-tab="overview">地牢总览 (#overview)</button>
+        </div>
+        <div id="rep-insp-content" class="insp-content"></div>
+      </div>
+      <div class="insp-foot">
+        <span>只读沙盒视角，不产生任何分叉记录；想亲自接管该回合可点回放控制栏的「⚡ 从当前回合分叉由我来打」。</span>
+      </div>
+    </div>
   </div>
 </main>
 
@@ -389,7 +432,7 @@
 </main>
 
 <footer id="foot">airstring · NetHack 3.6.7 · 种子对局 · 全程可验真</footer>
-<script src="./firebase-config.js?v=p2fix5"></script>
-<script type="module" src="./airstring.js?v=p2fix5"></script>
+<script src="./firebase-config.js?v=p2fix6"></script>
+<script type="module" src="./airstring.js?v=p2fix6"></script>
 </body>
 </html>
