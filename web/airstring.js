@@ -25,7 +25,7 @@ import { COMMANDS, DIRS, dirByte } from './commands.js';
  * In every other case `cloud` is null (or reports no user) and the
  * upload path below is the S5 local-stub behaviour, unchanged. */
 let cloud = null;
-try { cloud = (await import('./firebase.js?v=p2fix6')).default; }
+try { cloud = (await import('./firebase.js?v=p2fix7')).default; }
 catch (e) { cloud = null; }
 function cloudActive() { return !!(cloud && cloud.currentUser()); }
 
@@ -51,13 +51,84 @@ const ROLES = {
 const RACE_ZH = { human: '人类', elf: '精灵', dwarf: '矮人', gnome: '侏儒', orc: '兽人' };
 const ALIGN_ZH = { lawful: '守序', neutral: '中立', chaotic: '混沌' };
 
-/* ---------------- UI preferences (mobile zoom & hand flip) ---------------- */
+/* ---------------- UI preferences (mobile zoom, hand flip, veteran QoL) ---------------- */
 const mobileMQ = window.matchMedia('(max-width: 768px), (pointer: coarse)');
 function isMobileMode() { return mobileMQ.matches; }
 
 let mobileZoomed = true; /* mobile portrait default: follow-@ zoomed viewport */
 let rightHandPad = false;
-try { rightHandPad = localStorage.getItem('airstring_hand_right') === '1'; } catch (e) { }
+let termTheme = 'nao';
+let termFontScale = 100;
+let dangerGuardEnabled = true;
+try {
+  rightHandPad = localStorage.getItem('airstring_hand_right') === '1';
+  termTheme = localStorage.getItem('airstring_term_theme') || 'nao';
+  const fs = parseInt(localStorage.getItem('airstring_font_scale') || '100', 10);
+  if (Number.isFinite(fs) && fs >= 75 && fs <= 140) termFontScale = fs;
+  const dg = localStorage.getItem('airstring_danger_guard');
+  if (dg === '0') dangerGuardEnabled = false;
+} catch (e) { }
+
+const EXTENDED_COMMANDS = [
+  'adjust', 'annotate', 'attributes', 'chat', 'conduct', 'dip', 'enhance',
+  'force', 'invoke', 'jump', 'loot', 'monster', 'name', 'offer', 'overview',
+  'pray', 'quit', 'ride', 'rub', 'sit', 'terrain', 'tip', 'turn', 'twoweapon',
+  'untrap', 'version', 'wipe', 'youpoly',
+];
+
+const DANGER_MSG_RE = /cockatrice|chickatrice|turning to stone|limbs are stiffening|mind flayer|deadly poison|food poisoning|turning into.*slime|you faint|fainting|starving|shopkeeper gets angry|demogorgon|pestilence|famine|death hits|low hitpoints|you feel very weak|sickness|touch of death/i;
+
+function applyTerminalPrefs() {
+  document.body.classList.remove('theme-nao', 'theme-classic', 'theme-amber');
+  document.body.classList.add('theme-' + (termTheme || 'nao'));
+  if ($('term-theme-select')) $('term-theme-select').value = termTheme;
+  if ($('term-font-val')) $('term-font-val').textContent = termFontScale + '%';
+  if ($('opt-danger-guard')) $('opt-danger-guard').checked = dangerGuardEnabled;
+}
+
+function loadSavedVetOptions() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem('airstring_nh_opts_v1') || 'null'); } catch (_) { }
+  if (!saved || typeof saved !== 'object') return;
+  if ($('opt-autopickup') && typeof saved.autopickup === 'boolean') $('opt-autopickup').checked = saved.autopickup;
+  if ($('opt-pickup-types') && typeof saved.pickupTypes === 'string') $('opt-pickup-types').value = saved.pickupTypes;
+  if ($('opt-lit-corridor') && typeof saved.litCorridor === 'boolean') $('opt-lit-corridor').checked = saved.litCorridor;
+  if ($('opt-hilite-pet') && typeof saved.hilitePet === 'boolean') $('opt-hilite-pet').checked = saved.hilitePet;
+  if ($('opt-hilite-pile') && typeof saved.hilitePile === 'boolean') $('opt-hilite-pile').checked = saved.hilitePile;
+  if ($('opt-paranoid') && typeof saved.paranoid === 'boolean') $('opt-paranoid').checked = saved.paranoid;
+  if ($('opt-numpad') && typeof saved.numpad === 'boolean') $('opt-numpad').checked = saved.numpad;
+  if ($('opt-showexp') && typeof saved.showexp === 'boolean') $('opt-showexp').checked = saved.showexp;
+}
+
+function buildVetOptionsSuffix() {
+  const autopickup = $('opt-autopickup') ? $('opt-autopickup').checked : true;
+  const rawPickup = ($('opt-pickup-types') ? $('opt-pickup-types').value : '$?!"=/') || '';
+  /* Strict whitelist for pickup_types symbols (NetHack object classes only, no commas/control chars) */
+  const pickupTypes = rawPickup.replace(/[^$?!"=/+%()*[\]`0_]/g, '').slice(0, 16);
+  const litCorridor = $('opt-lit-corridor') ? $('opt-lit-corridor').checked : true;
+  const hilitePet = $('opt-hilite-pet') ? $('opt-hilite-pet').checked : true;
+  const hilitePile = $('opt-hilite-pile') ? $('opt-hilite-pile').checked : true;
+  const paranoid = $('opt-paranoid') ? $('opt-paranoid').checked : true;
+  const numpad = $('opt-numpad') ? $('opt-numpad').checked : false;
+  const showexp = $('opt-showexp') ? $('opt-showexp').checked : true;
+
+  try {
+    localStorage.setItem('airstring_nh_opts_v1', JSON.stringify({
+      autopickup, pickupTypes, litCorridor, hilitePet, hilitePile, paranoid, numpad, showexp,
+    }));
+  } catch (_) { }
+
+  const parts = [];
+  parts.push(autopickup ? 'autopickup' : '!autopickup');
+  if (autopickup && pickupTypes) parts.push('pickup_types:' + pickupTypes);
+  if (litCorridor) parts.push('lit_corridor');
+  if (hilitePet) parts.push('hilite_pet');
+  if (hilitePile) parts.push('hilite_pile');
+  if (paranoid) parts.push('paranoid_confirmation:pray quit die attack');
+  if (numpad) parts.push('number_pad:1');
+  if (showexp) parts.push('showexp', 'time');
+  return parts.join(',');
+}
 
 function fillSetupForm() {
   const roleSel = $('opt-role'), raceSel = $('opt-race'), alignSel = $('opt-align');
@@ -841,12 +912,28 @@ function handleEvent(json) {
     case 'message':
       S.messages.push(ev.text);
       if (S.messages.length > 300) S.messages.shift();
+      if (/you begin praying|you finish your prayer/i.test(ev.text || '')) {
+        S.lastPrayTurn = S.lastFrame ? (S.lastFrame.turn || S.lastFrame.moves || 0) : 0;
+        if (!fast) updateNotesPrayStatus();
+      }
+      if (/^Pick (an object|a location)|^Where do you want to travel/i.test(ev.text || '')) {
+        if (!fast && S.heroPos) {
+          S.cursorPos = {
+            x: S.heroPos.x,
+            y: S.heroPos.y,
+            mode: /travel/i.test(ev.text || '') ? 'travel' : 'farlook',
+          };
+          updateCursorHint();
+          renderGrid();
+        }
+      }
       if (fast) {
         S.logBuffer.push(ev.text);
         if (S.logBuffer.length > 200) S.logBuffer.shift();
       } else {
         renderMessages();
         appendLog(ev.text);
+        maybeTriggerDangerGuard(ev.text);
       }
       break;
     case 'raw':
@@ -858,6 +945,7 @@ function handleEvent(json) {
       } else {
         renderMessages();
         appendLog('[!] ' + ev.text);
+        maybeTriggerDangerGuard(ev.text);
       }
       break;
     case 'more':
@@ -890,6 +978,7 @@ function handleEvent(json) {
       break;
     case 'menu':
       S.menu = ev; S.counters.menu++;
+      if (S.cursorPos) clearCursorPos();
       if (!fast) renderMenu(ev);
       break;
     case 'menu-end':
@@ -899,6 +988,7 @@ function handleEvent(json) {
     case 'text':
       S.textActive = true; S.counters.text++;
       S.lastTextEv = ev;
+      if (S.cursorPos) clearCursorPos();
       if (!fast) renderText(ev);
       break;
     case 'getret': S.getretActive = true; break;
@@ -933,14 +1023,67 @@ function handleEvent(json) {
   if (!fast) renderBar();
 }
 
+/* ---------------- danger guard shield & farlook/travel cursor helpers ---------------- */
+let dangerLockUntil = 0;
+let dangerClearTimer = null;
+
+function clearDangerShield() {
+  dangerLockUntil = 0;
+  if (dangerClearTimer) { clearTimeout(dangerClearTimer); dangerClearTimer = null; }
+  if ($('danger-shield')) $('danger-shield').hidden = true;
+  if ($('msg-wrap')) $('msg-wrap').classList.remove('danger-flash');
+}
+
+function maybeTriggerDangerGuard(text) {
+  if (!dangerGuardEnabled || !text || !S || S.buffering) return;
+  if (!DANGER_MSG_RE.test(text)) return;
+  dangerLockUntil = Date.now() + 650;
+  if ($('msg-wrap')) $('msg-wrap').classList.add('danger-flash');
+  const box = $('danger-shield');
+  const lbl = $('danger-shield-text');
+  if (box && lbl) {
+    lbl.textContent = '🛑 高危警报：' + String(text).slice(0, 72) + '（已防手滑保护，按 Space 立即解除）';
+    box.hidden = false;
+  }
+  if (dangerClearTimer) clearTimeout(dangerClearTimer);
+  dangerClearTimer = setTimeout(() => {
+    if ($('msg-wrap')) $('msg-wrap').classList.remove('danger-flash');
+    if ($('danger-shield')) $('danger-shield').hidden = true;
+  }, 4500);
+}
+
+function updateCursorHint() {
+  const el = $('cursor-hint');
+  if (!el) return;
+  if (!S || !S.cursorPos) {
+    el.hidden = true;
+    return;
+  }
+  const tag = S.cursorPos.mode === 'travel' ? '_ 寻路光标' : '; 远看光标';
+  el.textContent = `${tag} (${S.cursorPos.x}, ${S.cursorPos.y}) · 方向键/Shift×8/点击地图移动 · . 确认 · Esc 退出`;
+  el.hidden = false;
+}
+
+function clearCursorPos() {
+  if (S) S.cursorPos = null;
+  updateCursorHint();
+  if (S && !S.buffering) renderGrid();
+}
+
 /* ---------------- map viewport: full 80x21 + mobile follow-@ zoom ---------------- */
 function onMap(ev) {
   const prev = S.mapRows, prevHero = S.heroPos;
   S.mapRows = ev.rows; S.mapColors = ev.colors;
   let hero = null;
-  for (let y = 0; y < ev.rows.length; y++) {
-    const x = ev.rows[y].indexOf('@');
-    if (x >= 0) { hero = { x, y }; break; }
+  /* Prefer exact [hero] x/y from engine frame (immune to shopkeeper @ and polymorph!) */
+  if (S.lastFrame && S.lastFrame.x != null && S.lastFrame.y != null &&
+      S.lastFrame.x >= 0 && S.lastFrame.x < 80 && S.lastFrame.y >= 0 && S.lastFrame.y < 21) {
+    hero = { x: S.lastFrame.x, y: S.lastFrame.y };
+  } else {
+    for (let y = 0; y < ev.rows.length; y++) {
+      const x = ev.rows[y].indexOf('@');
+      if (x >= 0) { hero = { x, y }; break; }
+    }
   }
   if (hero) {
     if (prev && prevHero && (hero.x !== prevHero.x || hero.y !== prevHero.y)) {
@@ -976,19 +1119,23 @@ function renderGrid() {
   const sw = Math.max(120, stage.clientWidth - 8);
   const sh = Math.max(100, stage.clientHeight - 8);
   const useZoom = isMobileMode() && mobileZoomed && S.heroPos;
+  const scale = (termFontScale || 100) / 100;
 
   let x0 = 0, y0 = 0, viewW = 80, viewH = 21, fs = 14;
   if (useZoom) {
     /* Crisp ~15.5px font on mobile portrait, hard-snapped centered on @ */
-    fs = Math.max(13, Math.min(17, Math.floor(sw / 25 / 0.61)));
-    viewW = Math.max(20, Math.min(80, Math.floor(sw / (fs * 0.61))));
-    viewH = Math.max(11, Math.min(21, Math.floor(sh / (fs * 1.16))));
-    x0 = Math.max(0, Math.min(80 - viewW, S.heroPos.x - Math.floor(viewW / 2)));
-    y0 = Math.max(0, Math.min(21 - viewH, S.heroPos.y - Math.floor(viewH / 2)));
+    fs = Math.max(11, Math.min(22, Math.round(Math.max(13, Math.min(17, Math.floor(sw / 25 / 0.61))) * scale)));
+    viewW = Math.max(16, Math.min(80, Math.floor(sw / (fs * 0.61))));
+    viewH = Math.max(9, Math.min(21, Math.floor(sh / (fs * 1.16))));
+    const focus = S.cursorPos || S.heroPos;
+    x0 = Math.max(0, Math.min(80 - viewW, focus.x - Math.floor(viewW / 2)));
+    y0 = Math.max(0, Math.min(21 - viewH, focus.y - Math.floor(viewH / 2)));
   } else {
     const fsW = Math.floor(sw / 80 / 0.605);
     const fsH = Math.floor(sh / 21 / 1.17);
-    fs = Math.max(6, Math.min(24, fsW, fsH));
+    const fitFs = Math.max(6, Math.min(24, fsW, fsH));
+    fs = Math.max(6, Math.min(fitFs, Math.round(fitFs * scale)));
+    if (scale > 1.0) fs = Math.min(28, Math.round(fitFs * scale));
   }
 
   grid.style.fontSize = fs + 'px';
@@ -1020,10 +1167,13 @@ function renderGrid() {
       cell.dataset.y = mapY;
       const ch = chars[mapX] || ' ';
       if (cell.textContent !== ch) cell.textContent = ch;
-      const isHero = S.heroPos && mapX === S.heroPos.x && mapY === S.heroPos.y && ch === '@';
-      const cls = isHero
-        ? 'hero-cell'
-        : ('c' + (((colors[mapX] | 0) & 0x1f) % 16));
+      const isCur = S.cursorPos && mapX === S.cursorPos.x && mapY === S.cursorPos.y;
+      const isHero = S.heroPos && mapX === S.heroPos.x && mapY === S.heroPos.y;
+      const cls = isCur
+        ? 'cursor-cell'
+        : isHero
+          ? 'hero-cell'
+          : ('c' + (((colors[mapX] | 0) & 0x1f) % 16));
       if (cell.className !== cls) cell.className = cls;
     }
   }
@@ -1088,11 +1238,22 @@ function renderStatus() {
     makeSpan('', `AC:${f.ac}`),
     makeSpan('st-dlvl', `Dlvl:${f.dlevel}`),
     makeSpan('st-gold', `$:${f.gold}`),
-    makeSpan('', `XL:${f.xl}`),
-    makeSpan('', `T:${f.moves}`)
+    makeSpan('', `XL:${f.xl}` + (f.exp != null ? `/${f.exp}` : '')),
+    makeSpan('', `T:${f.moves}`),
+    makeSpan('', `包:${f.invCount ?? 0}`)
   );
+  if (!isMobileMode() && Array.isArray(f.attrs) && f.attrs.length >= 6) {
+    const [st, iq, wi, dx, co, ch] = f.attrs;
+    el.append(makeSpan('desktop-only', `St:${st} Dx:${dx} Co:${co} In:${iq} Wi:${wi} Ch:${ch}`));
+  }
   if (hungerWord) {
     el.append(makeSpan('st-hunger' + (hungerCrit ? ' crit' : ''), hungerWord));
+  }
+  if (f.burden > 0) {
+    el.append(makeSpan('st-hunger' + (f.burden >= 3 ? ' crit' : ''), BURDEN_ZH[f.burden] || '负重'));
+  }
+  if (Array.isArray(f.cond) && f.cond.some((v) => v > 0)) {
+    el.append(makeSpan('st-hunger crit', '⚠ 异常'));
   }
 }
 
@@ -1167,24 +1328,85 @@ function renderText(ev) {
   overlayAction('继续（空格）', () => sendKey(' '), true);
 }
 
-/* ---------------- line prompt ---------------- */
+/* ---------------- line prompt + # extended command Tab completion ---------------- */
+function isExtendedCmdPrompt() {
+  const q = ($('line-q') && $('line-q').textContent) || '';
+  return q.trim().startsWith('#');
+}
+function matchingExtendedCmds(prefix) {
+  const p = String(prefix || '').trim().toLowerCase();
+  if (!p) return EXTENDED_COMMANDS.slice(0, 12);
+  return EXTENDED_COMMANDS.filter((c) => c.startsWith(p));
+}
+function renderLineSuggestions() {
+  const box = $('line-suggest');
+  if (!box) return;
+  if ($('linebar').hidden || !isExtendedCmdPrompt()) {
+    box.hidden = true;
+    box.innerHTML = '';
+    return;
+  }
+  const val = ($('line-input') && $('line-input').value) || '';
+  const matches = matchingExtendedCmds(val);
+  if (!matches.length) {
+    box.hidden = true;
+    box.innerHTML = '';
+    return;
+  }
+  box.hidden = false;
+  box.innerHTML = '';
+  matches.slice(0, 12).forEach((cmd, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'line-suggest-chip' + (i === 0 ? ' first' : '');
+    b.textContent = '#' + cmd;
+    b.addEventListener('click', () => {
+      $('line-input').value = cmd;
+      submitLine();
+    });
+    box.appendChild(b);
+  });
+}
+function completeLineInput() {
+  if (!isExtendedCmdPrompt()) return false;
+  const inp = $('line-input');
+  const val = (inp.value || '').trim().toLowerCase();
+  const matches = matchingExtendedCmds(val);
+  if (!matches.length) return false;
+  if (matches.length === 1) {
+    inp.value = matches[0];
+  } else {
+    let common = matches[0];
+    for (let i = 1; i < matches.length; i++) {
+      let j = 0;
+      while (j < common.length && j < matches[i].length && common[j] === matches[i][j]) j++;
+      common = common.slice(0, j);
+    }
+    inp.value = common.length > val.length ? common : matches[0];
+  }
+  renderLineSuggestions();
+  return true;
+}
 function showLineBar(q) {
   $('linebar').hidden = false;
   $('line-q').textContent = q || '';
   const inp = $('line-input');
   inp.value = '';
+  renderLineSuggestions();
   setTimeout(() => {
     if (!$('linebar').hidden) inp.focus({ preventScroll: true });
   }, 30);
 }
 function hideLineBar() {
   $('linebar').hidden = true;
+  if ($('line-suggest')) { $('line-suggest').hidden = true; $('line-suggest').innerHTML = ''; }
   if (document.activeElement === $('line-input')) $('line-input').blur();
 }
 function submitLine() {
   const inp = $('line-input');
   sendBytes(inp.value + '\n');
   inp.value = '';
+  if ($('line-suggest')) { $('line-suggest').hidden = true; $('line-suggest').innerHTML = ''; }
 }
 
 /* ---------------- adaptive thumb control zone (mobile portrait + optional desktop) ---------------- */
@@ -1422,53 +1644,218 @@ function renderPanel(filter) {
   }
 }
 
-/* ---------------- physical keyboard: full passthrough ---------------- */
+/* ---------------- physical keyboard: full veteran passthrough ---------------- */
+let imeWarnTimer = null;
+function showImeWarn() {
+  const el = $('ime-warn');
+  if (!el) return;
+  el.hidden = false;
+  if (imeWarnTimer) clearTimeout(imeWarnTimer);
+  imeWarnTimer = setTimeout(() => { el.hidden = true; }, 4500);
+}
+function hideImeWarn() {
+  if (imeWarnTimer) { clearTimeout(imeWarnTimer); imeWarnTimer = null; }
+  if ($('ime-warn')) $('ime-warn').hidden = true;
+}
+
+function isNumpadSession() {
+  return !!(S && /\bnumber_pad:1\b/i.test(S.options || ''));
+}
+
+function dirByteForSession(dx, dy) {
+  if (isNumpadSession()) {
+    const m = {
+      '-1,1': '1', '0,1': '2', '1,1': '3',
+      '-1,0': '4', '0,0': '.', '1,0': '6',
+      '-1,-1': '7', '0,-1': '8', '1,-1': '9',
+    };
+    return m[`${dx},${dy}`] || null;
+  }
+  return dirByte(dx, dy);
+}
+
+const VI_DELTA = {
+  104: [-1, 0, 1], 106: [0, 1, 1], 107: [0, -1, 1], 108: [1, 0, 1],
+  121: [-1, -1, 1], 117: [1, -1, 1], 98: [-1, 1, 1], 110: [1, 1, 1],
+  72: [-1, 0, 8], 74: [0, 1, 8], 75: [0, -1, 8], 76: [1, 0, 8],
+  89: [-1, -1, 8], 85: [1, -1, 8], 66: [-1, 1, 8], 78: [1, 1, 8],
+};
+const NUM_DELTA = {
+  49: [-1, 1, 1], 50: [0, 1, 1], 51: [1, 1, 1],
+  52: [-1, 0, 1], 54: [1, 0, 1],
+  55: [-1, -1, 1], 56: [0, -1, 1], 57: [1, -1, 1],
+};
+
+function isMoveByte(byte) {
+  return isNumpadSession() ? !!NUM_DELTA[byte] : !!VI_DELTA[byte];
+}
+
+function applyCursorByte(byte) {
+  if (!S || !S.cursorPos) return;
+  const d = (isNumpadSession() ? NUM_DELTA[byte] : null) || VI_DELTA[byte];
+  if (d) {
+    S.cursorPos.x = Math.max(0, Math.min(79, S.cursorPos.x + d[0] * d[2]));
+    S.cursorPos.y = Math.max(0, Math.min(20, S.cursorPos.y + d[1] * d[2]));
+    updateCursorHint();
+    renderGrid();
+    return;
+  }
+  /* Confirming or cancelling farlook / travel exits cursor mode */
+  if (byte === 27 || byte === 13 || byte === 46 || byte === 44 || byte === 59 || byte === 58 || byte === 32) {
+    clearCursorPos();
+  }
+}
+
+document.addEventListener('compositionstart', () => {
+  if (!S || S.over || S.buffering || $('game').hidden) return;
+  const t = document.activeElement;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
+  showImeWarn();
+});
+
 document.addEventListener('keydown', (e) => {
   if (!S || S.over || S.buffering || S.tabLocked || $('game').hidden) return;
+  if ($('dumplog-modal') && !$('dumplog-modal').hidden) {
+    if (e.key === 'Escape') { e.preventDefault(); closeDumplogModal(); }
+    return;
+  }
   const t = e.target;
   if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' ||
-            t.tagName === 'SELECT')) return;
+            t.tagName === 'SELECT')) {
+    if (e.key === 'Escape' && t.id === 'notes-textarea') {
+      e.preventDefault();
+      toggleNotesDrawer(false);
+    }
+    return;
+  }
+
+  /* IME Chinese/CJK input guard */
+  if (e.isComposing || e.key === 'Process' || e.keyCode === 229) {
+    showImeWarn();
+    e.preventDefault();
+    return;
+  }
+
   if (e.key === 'Escape') {
+    if ($('notes-drawer') && !$('notes-drawer').hidden) { toggleNotesDrawer(false); return; }
     if ($('game-drawer') && !$('game-drawer').hidden) { toggleGameDrawer(false); return; }
     if ($('panel') && !$('panel').hidden) { togglePanel(false); return; }
     if ($('msglog-drawer') && !$('msglog-drawer').hidden) { toggleMsgLog(false); return; }
+    if (dangerLockUntil > Date.now()) { clearDangerShield(); return; }
   }
+
+  if (dangerLockUntil > Date.now()) {
+    if (e.key === ' ') {
+      e.preventDefault();
+      clearDangerShield();
+      return;
+    }
+  }
+
   let byte = null;
-  if (e.ctrlKey && e.key.length === 1) {
+  /* Safe Shift+Alt aliases for browser-hijacked Ctrl shortcuts (Ctrl+T/P/R/D) */
+  if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey) {
+    const code = e.code || '';
+    if (code === 'KeyT') byte = 20;      /* Ctrl+T teleport */
+    else if (code === 'KeyP') byte = 16; /* Ctrl+P prev messages */
+    else if (code === 'KeyR') byte = 18; /* Ctrl+R redraw */
+    else if (code === 'KeyD') byte = 4;  /* Ctrl+D kick */
+  }
+  /* Native NetHack Meta keys (Alt+a..z / Alt+2 -> 0x80 | ascii) */
+  if (byte == null && e.altKey && !e.ctrlKey && !e.metaKey) {
+    const code = e.code || '';
+    if (/^Key([A-Z])$/.test(code)) {
+      byte = 0x80 | code.slice(3).toLowerCase().charCodeAt(0);
+    } else if (code === 'Digit2') {
+      byte = 0x80 | 50; /* M-2 twoweapon */
+    } else {
+      return;
+    }
+  } else if (byte == null && e.ctrlKey && e.key.length === 1) {
     byte = e.key.toUpperCase().charCodeAt(0) & 0x1f;
-  } else if (e.altKey || e.metaKey) {
+  } else if (byte == null && e.metaKey) {
     return;
-  } else if (e.key.length === 1) {
-    byte = e.key.charCodeAt(0) & 0xff;
-  } else {
+  } else if (byte == null && /^Numpad[1-9]$/.test(e.code || '')) {
+    const n = parseInt(e.code.slice(6), 10);
+    const map = {
+      1: [-1, 1], 2: [0, 1], 3: [1, 1],
+      4: [-1, 0], 5: [0, 0], 6: [1, 0],
+      7: [-1, -1], 8: [0, -1], 9: [1, -1],
+    };
+    const [dx, dy] = map[n];
+    const ch = dirByteForSession(dx, dy);
+    if (ch) byte = ch.charCodeAt(0);
+  } else if (byte == null && e.key.length === 1) {
+    const cc = e.key.charCodeAt(0);
+    if (cc > 127) { showImeWarn(); e.preventDefault(); return; }
+    byte = cc & 0xff;
+  } else if (byte == null) {
+    const dKey = (dx, dy) => {
+      const ch = dirByteForSession(dx, dy);
+      return ch ? ch.charCodeAt(0) : null;
+    };
     switch (e.key) {
       case 'Enter': byte = 13; break;
       case 'Escape': byte = 27; break;
       case 'Backspace': byte = 127; break;
       case 'Tab': byte = 9; break;
-      case 'ArrowLeft': byte = 104; break;  /* h */
-      case 'ArrowDown': byte = 106; break;  /* j */
-      case 'ArrowUp': byte = 107; break;    /* k */
-      case 'ArrowRight': byte = 108; break; /* l */
+      case 'ArrowLeft': byte = dKey(-1, 0); break;
+      case 'ArrowDown': byte = dKey(0, 1); break;
+      case 'ArrowUp': byte = dKey(0, -1); break;
+      case 'ArrowRight': byte = dKey(1, 0); break;
+      case 'Home': byte = dKey(-1, -1); break;
+      case 'PageUp': byte = dKey(1, -1); break;
+      case 'End': byte = dKey(-1, 1); break;
+      case 'PageDown': byte = dKey(1, 1); break;
       default: return;
     }
   }
   if (byte == null) return;
+  hideImeWarn();
+
+  /* Block accidental rapid movement during active danger shield */
+  if (dangerLockUntil > Date.now() && isMoveByte(byte) && !S.cursorPos) {
+    e.preventDefault();
+    return;
+  }
+
   e.preventDefault();
+  if (S.cursorPos) {
+    applyCursorByte(byte);
+  } else if (uiMode() === 'main' && (byte === 59 || byte === 95) && S.heroPos) {
+    /* Enter client-side cursor tracking immediately on ';' (farlook) or '_' (travel) */
+    S.cursorPos = { x: S.heroPos.x, y: S.heroPos.y, mode: byte === 95 ? 'travel' : 'farlook' };
+    updateCursorHint();
+    renderGrid();
+  }
   sendBytes([byte]);
 });
 
-/* map taps: adjacent = move/attack, hero = wait, far = travel (works in both full & zoomed view!) */
+/* map taps: cursor move in farlook/travel, adjacent = move/attack, hero = wait, far = travel */
 $('grid').addEventListener('click', (e) => {
   if (!S || S.over || S.buffering || S.tabLocked || !S.heroPos) return;
   const cell = e.target.closest('span[data-x]');
   if (!cell) return;
   const x = +cell.dataset.x, y = +cell.dataset.y;
+  if (S.cursorPos) {
+    let cx = x - S.cursorPos.x, cy = y - S.cursorPos.y;
+    let seq = '';
+    while (cx !== 0 || cy !== 0) {
+      const sx = Math.sign(cx), sy = Math.sign(cy);
+      seq += dirByteForSession(sx, sy);
+      cx -= sx; cy -= sy;
+    }
+    S.cursorPos.x = x; S.cursorPos.y = y;
+    updateCursorHint();
+    renderGrid();
+    if (seq) sendBytes(seq);
+    return;
+  }
   const dx = x - S.heroPos.x, dy = y - S.heroPos.y;
   const mode = uiMode();
   if (mode !== 'main' && mode !== 'dir' && mode !== 'dirprompt') return;
   if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) {
-    const b = dirByte(dx, dy);
+    const b = dirByteForSession(dx, dy);
     if (b) sendKey(b);
     return;
   }
@@ -1476,7 +1863,7 @@ $('grid').addEventListener('click', (e) => {
   let seq = '_', cx = dx, cy = dy;
   while (cx !== 0 || cy !== 0) {
     const sx = Math.sign(cx), sy = Math.sign(cy);
-    seq += dirByte(sx, sy);
+    seq += dirByteForSession(sx, sy);
     cx -= sx; cy -= sy;
   }
   seq += '.';
@@ -1506,6 +1893,7 @@ function parseFrame(text) {
     hash: get(/hash=([0-9a-f]{64})/),
     name: S ? S.playerName : '',
     role: S ? S.roleEn : '',
+    x: num(/\bx=(\d+)/), y: num(/\by=(\d+)/),
     hp: num(/hp=(-?\d+)/), hpmax: num(/hpmax=(\d+)/),
     pw: num(/pw=(-?\d+)/), pwmax: num(/pwmax=(\d+)/),
     ac: num(/ac=(-?\d+)/), xl: num(/xl=(\d+)/),
@@ -1537,7 +1925,11 @@ function handleFrame(text) {
     return;
   }
 
+  if (f.x != null && f.y != null && f.x >= 0 && f.x < 80 && f.y >= 0 && f.y < 21) {
+    S.heroPos = { x: f.x, y: f.y };
+  }
   renderStatus();
+  if ($('notes-drawer') && !$('notes-drawer').hidden) updateNotesPrayStatus();
   if (!S.tabLocked && cloudActive()) {
     saveLocalSnapshot();
     S.dirtyCloud = true;
@@ -1793,7 +2185,7 @@ function pumpBuffer(sid) {
     return;
   }
   let offset = 0;
-  const CHUNK = 48;
+  const CHUNK = 256;
 
   function step() {
     if (!S || S.sid !== sid || !S.buffering) return;
@@ -2402,11 +2794,14 @@ async function startGame(plan) {
       seed = randomSeed64();
       seedSource = 'random';
     }
-    options = `name:${name},role:${role},race:${race},gender:${gender},align:${align}`;
+    const vetSuffix = buildVetOptionsSuffix();
+    options = `name:${name},role:${role},race:${race},gender:${gender},align:${align}` + (vetSuffix ? ',' + vetSuffix : '');
     gameId = makeGameId(seed);
   }
 
   teardownCurrentSession();
+  clearDangerShield();
+  hideImeWarn();
   const sid = activeSessionToken;
   const hasBuffer = !!(plan && plan.replayBytes && plan.replayBytes.length > 0);
 
@@ -2421,6 +2816,9 @@ async function startGame(plan) {
     bufferReplayBytes: hasBuffer ? plan.replayBytes : null,
   });
   S.playerName = name; S.roleEn = role;
+  S.cursorPos = null; S.lastPrayTurn = null;
+  updateCursorHint();
+  loadGameNotes(gameId);
 
   const headerRec = {
     k: 'header', gameId, seed, seedSource, date: FIXED_DATE, options,
@@ -2462,7 +2860,7 @@ async function startGame(plan) {
   lastGridDims = '';
   $('msglog').innerHTML = '';
   hideOverlay(); hideLineBar(); togglePanel(false);
-  toggleMsgLog(false); toggleGameDrawer(false);
+  toggleMsgLog(false); toggleGameDrawer(false); toggleNotesDrawer(false);
   updateSeedBanner();
   updateDrawerSyncBanner();
 
@@ -2484,7 +2882,7 @@ async function startGame(plan) {
 
   globalThis.__airstring_config = {
     seed, date: FIXED_DATE, options, mode: 'async',
-    exportPath: '/fleck.frames', rngPath: '/fleck.rng',
+    exportPath: '/dev/null', rngPath: '/dev/null',
   };
   globalThis.__airstring_key_queue = { bytes: [], pos: 0, closed: false };
   globalThis.__airstring_event = (json) => { if (S && S.sid === sid) handleEvent(json); };
@@ -2511,6 +2909,8 @@ async function startGame(plan) {
 function handleGameOver(status) {
   if (!S || S.over) return;
   if (S.buffering) finishBuffering(S.sid);
+  clearDangerShield();
+  clearCursorPos();
   S.over = true; S.overStatus = status;
   try { sessionStorage.removeItem('airstring_last_active_game'); } catch (e) { }
 
@@ -2563,9 +2963,16 @@ function handleGameOver(status) {
   const acts = document.createElement('div');
   acts.className = 'go-actions';
   const bNew = document.createElement('button');
-  bNew.type = 'button'; bNew.className = 'primary'; bNew.textContent = '返回开局页';
+  bNew.type = 'button'; bNew.className = 'primary'; bNew.textContent = '返回大厅';
   bNew.addEventListener('click', showSetup);
   acts.appendChild(bNew);
+
+  const bDump = document.createElement('button');
+  bDump.type = 'button';
+  bDump.textContent = '📜 完整战报 (Dumplog)';
+  const snapSess = S;
+  bDump.addEventListener('click', () => openDumplogFromGame(snapSess));
+  acts.appendChild(bDump);
 
   if (turns >= 2) {
     const ft = Math.max(1, turns - 1);
@@ -2596,6 +3003,11 @@ function leaveGame() {
 
 async function showSetup() {
   stopReplayPlayback();
+  closeDumplogModal();
+  clearDangerShield();
+  clearCursorPos();
+  hideImeWarn();
+  toggleNotesDrawer(false);
   R = null;
   if ($('replay')) $('replay').hidden = true;
   if ($('mygames')) $('mygames').hidden = true;
@@ -2676,9 +3088,62 @@ $('setup-form').addEventListener('submit', (e) => {
 $('line-send').addEventListener('click', submitLine);
 $('line-cancel').addEventListener('click', () => sendBytes([27]));
 $('line-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Tab') {
+    if (completeLineInput()) { e.preventDefault(); e.stopPropagation(); return; }
+  }
   if (e.key === 'Enter') { e.preventDefault(); submitLine(); }
+  else if (e.key === 'Escape') { e.preventDefault(); sendBytes([27]); }
   e.stopPropagation();
 });
+$('line-input').addEventListener('input', () => renderLineSuggestions());
+
+/* ---------------- In-game Per-Game Notepad & Prayer Cooldown Timer ---------------- */
+function toggleNotesDrawer(open) {
+  const el = $('notes-drawer');
+  if (!el) return;
+  const want = open == null ? el.hidden : !!open;
+  el.hidden = !want;
+  if ($('btn-notes')) $('btn-notes').classList.toggle('active', want);
+  if (want) {
+    toggleGameDrawer(false);
+    togglePanel(false);
+    toggleMsgLog(false);
+    updateNotesPrayStatus();
+    if ($('notes-textarea')) $('notes-textarea').focus({ preventScroll: true });
+  } else if (document.activeElement === $('notes-textarea')) {
+    $('notes-textarea').blur();
+  }
+}
+
+function loadGameNotes(gameId) {
+  const ta = $('notes-textarea');
+  if (!ta) return;
+  try {
+    ta.value = localStorage.getItem('airstring_notes_' + gameId) || '';
+  } catch (_) {
+    ta.value = '';
+  }
+  updateNotesPrayStatus();
+}
+
+function updateNotesPrayStatus() {
+  const el = $('notes-pray-status');
+  if (!el) return;
+  if (!S || S.lastPrayTurn == null) {
+    el.className = 'pray-ok';
+    el.textContent = '🙏 祈祷冷却：本局尚未祈祷（安全）';
+    return;
+  }
+  const curT = S.lastFrame ? (S.lastFrame.turn || S.lastFrame.moves || 0) : 0;
+  const diff = Math.max(0, curT - S.lastPrayTurn);
+  if (diff >= 300) {
+    el.className = 'pray-ok';
+    el.textContent = `🙏 祈祷已安全（上次 T${S.lastPrayTurn}，已过 ${diff} 回合 ≥ 300）`;
+  } else {
+    el.className = 'pray-wait';
+    el.textContent = `🙏 祈祷冷却中（上次 T${S.lastPrayTurn}，已过 ${diff}/300 回合）`;
+  }
+}
 $('btn-commands').addEventListener('click', () =>
   togglePanel($('panel').hidden));
 $('panel-close').addEventListener('click', () => togglePanel(false));
@@ -4183,8 +4648,334 @@ if ($('rep-msg-wrap')) {
   });
 }
 
+/* ---------------- NAO-style Complete Dumplog (Game Over & Replay Theater) ---------------- */
+let activeDumplogText = '';
+let activeDumplogFilename = 'airstring-dumplog.txt';
+
+function closeDumplogModal() {
+  if ($('dumplog-modal')) $('dumplog-modal').hidden = true;
+}
+
+function formatDumplogText({ meta, mapRows, insp, recentMsgs }) {
+  const hr = '--------------------------------------------------------------------------------';
+  const out = [];
+  out.push('airstring · NetHack 3.6.7 Dumplog');
+  out.push(hr);
+  out.push(`Game ID   : ${meta.gameId || '?'}`);
+  if (meta.displayName) out.push(`Player    : ${meta.displayName}`);
+  out.push(`Options   : ${meta.options || ''}`);
+  out.push(`Seed      : ${meta.seed ?? '?'} (${meta.seedSource || 'given'})  Date: ${FIXED_DATE}`);
+  out.push(`Turns     : ${meta.turns ?? '?'}   Max Dlvl: ${meta.maxDlvl ?? '?'}   Outcome: ${meta.outcome || 'ended'}`);
+  if (meta.deathReason) out.push(`End Note  : ${meta.deathReason}`);
+  if (meta.recordingSha256) out.push(`SHA-256   : ${meta.recordingSha256}`);
+  if (meta.batch) out.push(`Batch     : ${meta.batch}  Lineage: ${meta.lineageId || '-'}`);
+  out.push('');
+  if (Array.isArray(mapRows) && mapRows.length) {
+    out.push('=== Final Map Screenshot ===');
+    for (const r of mapRows) out.push(String(r || ''));
+    out.push('');
+  }
+  if (insp && insp.attrs && insp.attrs.length) {
+    out.push('=== Attributes & Status (^X) ===');
+    for (const l of insp.attrs) out.push(String(l.text || ''));
+    out.push('');
+  }
+  if (insp && insp.inv && insp.inv.length) {
+    out.push('=== Inventory & Equipment (i) ===');
+    for (const it of insp.inv) {
+      out.push((it.sel ? `${it.sel} - ` : '') + (it.text || ''));
+    }
+    out.push('');
+  }
+  if (insp && insp.overview && insp.overview.length) {
+    out.push('=== Dungeon Overview (#overview) ===');
+    for (const l of insp.overview) out.push(String(l.text || ''));
+    out.push('');
+  }
+  if (insp && insp.disc && insp.disc.length) {
+    out.push('=== Discoveries (\\) ===');
+    for (const l of insp.disc) out.push(String(l.text || ''));
+    out.push('');
+  }
+  if (Array.isArray(recentMsgs) && recentMsgs.length) {
+    out.push('=== Latest Messages ===');
+    for (const m of recentMsgs.slice(-40)) out.push(String(m));
+    out.push('');
+  }
+  out.push(hr);
+  out.push('Generated by https://airstring.org/ (deterministic WASM verifiable NetHack 3.6.7)');
+  return out.join('\n');
+}
+
+async function runOneShotDumplogSandbox({ seed, date, options, prefixBytes }) {
+  return new Promise(async (resolve, reject) => {
+    const sb = { alive: true, onEvent: null };
+    let pumpStarted = false;
+    let settled = false;
+    const stopSb = () => {
+      sb.alive = false;
+      sb.onEvent = null;
+      if (typeof globalThis.__airstring_close_keys === 'function') {
+        try { globalThis.__airstring_close_keys(); } catch (_) { }
+      }
+    };
+    const runQueries = async () => {
+      try {
+        const invRes = await runSandboxCmd(sb, [105]);
+        const attrRes = await runSandboxCmd(sb, [24]);
+        const discRes = await runSandboxCmd(sb, [92]);
+        const ovRes = await runSandboxCmd(sb, Array.from('#overview\n').map((c) => c.charCodeAt(0)));
+        stopSb();
+        resolve({
+          inv: invRes.items,
+          attrs: attrRes.items.length
+            ? attrRes.items.map((x) => ({ text: x.text || '' }))
+            : attrRes.lines,
+          disc: discRes.lines.length
+            ? discRes.lines
+            : discRes.items.map((x) => ({ text: (x.sel ? `${x.sel} - ` : '') + (x.text || '') })),
+          overview: ovRes.lines.length
+            ? ovRes.lines
+            : ovRes.items.map((x) => ({ text: x.text || '' })),
+        });
+      } catch (e) {
+        stopSb();
+        reject(e);
+      }
+    };
+    function pump() {
+      let off = 0;
+      const CHUNK = 256;
+      function step() {
+        if (!sb.alive) return;
+        const q = globalThis.__airstring_key_queue;
+        if (q && q.pos < q.bytes.length) { setTimeout(step, 4); return; }
+        if (off < prefixBytes.length) {
+          const end = Math.min(off + CHUNK, prefixBytes.length);
+          globalThis.__airstring_push_keys(prefixBytes.subarray(off, end));
+          off = end;
+          setTimeout(step, 0);
+          return;
+        }
+        setTimeout(() => {
+          if (!sb.alive || settled) return;
+          const q2 = globalThis.__airstring_key_queue;
+          if (q2 && q2.pos < q2.bytes.length) { setTimeout(step, 4); return; }
+          settled = true;
+          runQueries();
+        }, 70);
+      }
+      step();
+    }
+    globalThis.__airstring_config = {
+      seed: String(seed), date: date || FIXED_DATE, options,
+      mode: 'async', exportPath: '/dev/null', rngPath: '/dev/null',
+    };
+    globalThis.__airstring_key_queue = { bytes: [], pos: 0, closed: false };
+    globalThis.__airstring_event = (json) => {
+      if (!sb.alive) return;
+      let ev;
+      try { ev = JSON.parse(json); } catch (_) { return; }
+      if (ev.t === 'init' && !pumpStarted) { pumpStarted = true; pump(); }
+      else if (sb.onEvent) sb.onEvent(ev);
+    };
+    globalThis.__airstring_frame = () => { };
+    globalThis.__airstring_rngline = () => { };
+    globalThis.__airstring_game_over = () => {
+      if (!settled) { settled = true; stopSb(); resolve(null); }
+    };
+    try {
+      const { default: createModule } = await import('./nethack.js');
+      createModule({ print: () => { }, printErr: () => { } }).catch(() => { });
+    } catch (e) {
+      if (!settled) { settled = true; stopSb(); reject(e); }
+    }
+  });
+}
+
+async function openDumplogFromReplay() {
+  if (!R || R.buffering || !R.frames.length || !R.header) return;
+  stopReplayPlayback();
+  closeInspectModal();
+  const modal = $('dumplog-modal');
+  const loading = $('dumplog-loading');
+  const pre = $('dumplog-pre');
+  if (!modal || !pre) return;
+
+  const lastSnap = R.frames[R.frames.length - 1];
+  const probeIdx = Math.max(0, R.frames.length - 2);
+  const probeTurn = R.frames[probeIdx].turn || (probeIdx + 1);
+  activeDumplogFilename = `airstring-${R.game.gameId || 'replay'}.dumplog.txt`;
+  $('dumplog-title').textContent = `📜 Dumplog · ${R.game.gameId}`;
+  modal.hidden = false;
+  pre.textContent = '';
+  loading.hidden = false;
+  $('dumplog-status').textContent = `正在汇总第 ${probeTurn} 回合终局前完整装备/属性/图鉴…`;
+
+  let insp = R.inspectCache && R.inspectCache.get(probeTurn);
+  if (!insp) {
+    const sliced = R.turns.filter((t) => (t.turn || 0) <= probeTurn);
+    const prefixBytes = concatReplayBytes(sliced, null);
+    try {
+      insp = await runOneShotDumplogSandbox({
+        seed: R.header.seed, date: R.header.date, options: R.header.options, prefixBytes,
+      });
+      if (insp) R.inspectCache.set(probeTurn, { turn: probeTurn, ...insp, bags: {} });
+    } catch (_) { insp = null; }
+  }
+  loading.hidden = true;
+  activeDumplogText = formatDumplogText({
+    meta: {
+      gameId: R.game.gameId,
+      displayName: R.game.displayName,
+      options: R.header.options,
+      seed: R.header.seed,
+      seedSource: R.header.seedSource,
+      turns: lastSnap.turn,
+      maxDlvl: R.game.maxDlvl || lastSnap.dlvl,
+      outcome: R.game.outcome || 'ended',
+      deathReason: R.game.deathReason,
+      recordingSha256: R.game.recordingSha256,
+      batch: R.game.batch,
+      lineageId: R.game.lineageId,
+    },
+    mapRows: lastSnap.mapRows,
+    insp,
+    recentMsgs: (R.allMsgs || []).slice(-40).map((m) => `[T${m.turn}] ${m.text}`),
+  });
+  pre.textContent = activeDumplogText;
+}
+
+async function openDumplogFromGame(sess) {
+  if (!sess) return;
+  const modal = $('dumplog-modal');
+  const loading = $('dumplog-loading');
+  const pre = $('dumplog-pre');
+  if (!modal || !pre) return;
+
+  const allTurns = (sess.records || []).filter((r) => r && r.k === 'turn');
+  const probeCount = Math.max(1, allTurns.length - 1);
+  const sliced = allTurns.slice(0, probeCount);
+  activeDumplogFilename = `airstring-${sess.id || 'game'}.dumplog.txt`;
+  $('dumplog-title').textContent = `📜 Dumplog · ${sess.id}`;
+  modal.hidden = false;
+  pre.textContent = '';
+  loading.hidden = false;
+  $('dumplog-status').textContent = `正在只读沙盒中生成完整终局 Dumplog（共 ${allTurns.length} 回合）…`;
+
+  let insp = null;
+  if (sliced.length) {
+    try {
+      insp = await runOneShotDumplogSandbox({
+        seed: sess.seed, date: sess.date, options: sess.options,
+        prefixBytes: concatReplayBytes(sliced, null),
+      });
+    } catch (_) { insp = null; }
+  }
+  loading.hidden = true;
+  activeDumplogText = formatDumplogText({
+    meta: {
+      gameId: sess.id,
+      options: sess.options,
+      seed: sess.seed,
+      seedSource: sess.seedSource,
+      turns: sess.lastFrame ? sess.lastFrame.turn : allTurns.length,
+      maxDlvl: sess.lastFrame ? sess.lastFrame.dlevel : 1,
+      outcome: 'ended',
+    },
+    mapRows: sess.mapRows,
+    insp,
+    recentMsgs: (sess.messages || []).slice(-40),
+  });
+  pre.textContent = activeDumplogText;
+}
+
+/* Veteran UI controls wiring (notepad, terminal themes, font scale, danger guard, Dumplog) */
+if ($('btn-notes')) $('btn-notes').addEventListener('click', () => toggleNotesDrawer());
+if ($('notes-close')) $('notes-close').addEventListener('click', () => toggleNotesDrawer(false));
+if ($('notes-textarea')) {
+  $('notes-textarea').addEventListener('input', (e) => {
+    if (!S) return;
+    try { localStorage.setItem('airstring_notes_' + S.id, e.target.value); } catch (_) { }
+  });
+}
+if ($('btn-notes-stamp')) {
+  $('btn-notes-stamp').addEventListener('click', () => {
+    const ta = $('notes-textarea');
+    if (!ta || !S) return;
+    const dlvl = S.lastFrame ? (S.lastFrame.dlevel ?? 1) : 1;
+    const turn = S.lastFrame ? (S.lastFrame.turn ?? 0) : 0;
+    const prefix = ta.value && !ta.value.endsWith('\n') ? '\n' : '';
+    ta.value += `${prefix}[Dlvl:${dlvl} T:${turn}] `;
+    try { localStorage.setItem('airstring_notes_' + S.id, ta.value); } catch (_) { }
+    ta.focus();
+  });
+}
+if ($('term-theme-select')) {
+  $('term-theme-select').addEventListener('change', (e) => {
+    termTheme = e.target.value || 'nao';
+    try { localStorage.setItem('airstring_term_theme', termTheme); } catch (_) { }
+    applyTerminalPrefs();
+  });
+}
+if ($('btn-font-dec')) {
+  $('btn-font-dec').addEventListener('click', () => {
+    termFontScale = Math.max(75, termFontScale - 5);
+    try { localStorage.setItem('airstring_font_scale', String(termFontScale)); } catch (_) { }
+    applyTerminalPrefs();
+    renderGrid();
+  });
+}
+if ($('btn-font-inc')) {
+  $('btn-font-inc').addEventListener('click', () => {
+    termFontScale = Math.min(140, termFontScale + 5);
+    try { localStorage.setItem('airstring_font_scale', String(termFontScale)); } catch (_) { }
+    applyTerminalPrefs();
+    renderGrid();
+  });
+}
+if ($('opt-danger-guard')) {
+  $('opt-danger-guard').addEventListener('change', (e) => {
+    dangerGuardEnabled = !!e.target.checked;
+    try { localStorage.setItem('airstring_danger_guard', dangerGuardEnabled ? '1' : '0'); } catch (_) { }
+    if (!dangerGuardEnabled) clearDangerShield();
+  });
+}
+if ($('btn-danger-dismiss')) $('btn-danger-dismiss').addEventListener('click', () => clearDangerShield());
+if ($('btn-rep-dumplog')) $('btn-rep-dumplog').addEventListener('click', () => openDumplogFromReplay());
+if ($('btn-dumplog-close')) $('btn-dumplog-close').addEventListener('click', () => closeDumplogModal());
+if ($('dumplog-backdrop')) $('dumplog-backdrop').addEventListener('click', () => closeDumplogModal());
+if ($('btn-dumplog-copy')) {
+  $('btn-dumplog-copy').addEventListener('click', () => {
+    if (!activeDumplogText) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(activeDumplogText).then(() => {
+        const b = $('btn-dumplog-copy');
+        b.textContent = '✓ 已复制';
+        setTimeout(() => { b.textContent = '📋 复制'; }, 1800);
+      });
+    }
+  });
+}
+if ($('btn-dumplog-download')) {
+  $('btn-dumplog-download').addEventListener('click', () => {
+    if (!activeDumplogText) return;
+    const blob = new Blob([activeDumplogText], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = activeDumplogFilename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+}
+
 document.addEventListener('keydown', (e) => {
   if (!R || $('replay').hidden) return;
+  if ($('dumplog-modal') && !$('dumplog-modal').hidden) {
+    if (e.key === 'Escape') { e.preventDefault(); closeDumplogModal(); }
+    return;
+  }
   const inspOpen = $('rep-inspect-modal') && !$('rep-inspect-modal').hidden;
   if (inspOpen) {
     if (e.key === 'Escape') {
@@ -4243,7 +5034,9 @@ document.addEventListener('click', (e) => {
   if (b) b.blur();
 });
 
+applyTerminalPrefs();
 fillSetupForm();
+loadSavedVetOptions();
 renderBar();
 loadVerifiedLobby();
 if (cloud && cloud.onUserChange) {
