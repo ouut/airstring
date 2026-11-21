@@ -132,3 +132,13 @@ https://airstring-verifier-39704157599.us-central1.run.app 、冒烟局
 - **任务文件**：`ops/tasks/API-1-airstring-interfaces.md`（本提交新增）。仓主复核后改定简化版，**今晨下发的 MCP-1（8ebfd10）作废，以 API-1 为准**。
 - **变化要点**：接口就是 10 个普通 HTTPS 接口（Cloud Functions 即可，**不新建 Cloud Run**）；鉴权收敛为单个管理令牌；**验真全部在外部做——导入只落库不触发站内验真，verdict 随包带入**（冻结清单该条对导入数据按仓主裁定变更，站内玩家对局验真流程不受影响）；另加 6 个管理查询接口（对局列表/单局详情/统计概览/榜单快照/玩家查询/下架恢复）。
 - **请部署侧回话的只有 2 点**（规范文末）：管理令牌的保管与轮换、单包大小上限建议值。其余按规范正文与 5 条验收执行即可。
+
+## 部署侧（Antigravity）：API-1 回话与实施（2026-11-21）
+
+- **已确认切换至 API-1（MCP-1 作废）**，按规范在现有 Firebase 项目 `airstring-nethack` 上以 **Cloud Functions v2（`us-central1`）** 实现 10 个 HTTPS 接口，通过 Firebase Hosting `/api/**` 转发挂在 `https://airstring.org/api/...`（不新建独立 Cloud Run 服务），并附 1 个 Firestore 后台触发函数 `processImportBatch` 处理异步批次落库。
+- **回话 1（管理令牌保管与轮换）**：存放于 GCP Secret Manager（`AIRSTRING_ADMIN_TOKENS`），值支持 JSON 数组 `["<current>", "<previous>"]` 实现新旧双令牌无停机平滑轮换；通过 Functions v2 `defineSecret` 注入、恒定时间比对 `X-Admin-Token`，不入仓、不落日志；保持在 Secret Manager 免费额度（6 活跃版本）内。
+- **回话 2（单包大小上限建议值）**：压缩包体积 **≤ 256 MiB**（解压总字节安全护栏 **≤ 1 GiB** 防 zip bomb）；条数上限 **A 类 ≤ 200 条**、**B 类 `stub` ≤ 500 条**（可直接一包导入现有 299 条残局）；超限统一回 `413 TOO_LARGE`。GCS 临时目录 `exports/` 与 `import-inbox/` 已配 1 天自动过期 Lifecycle 规则防堆积。
+- **两处工程口径报备**：① `409 CONFLICT` 仅在同 `batch` 处于 `processing` 并发重提时触发，前批 `done` 后再次提交同包则按验收 1 正常建新 `batchId` 并逐条回 `duplicate`；② 前端大厅补上 `visible !== false` 过滤与 ⑩ 下架联动，导入 `verdict="verified"` 的 A 类局同步写 `public-recordings/{gameId}.jsonl` 以便站内直接回放；不触碰任何客户端 rules 与冻结清单。
+- **部署与验收完成（5 / 5 PASS）**：10 个接口已上线 `https://airstring.org/api/...`（`api` `us-central1` + `processImportBatch` `northamerica-northeast2`），全部 5 条验收标准在线上实测一次通过，合成测试数据已清理回基线（53 局：52 `verified` + 1 `pending`），详细报告见 **`ops/reports/API-1-report.md`**。
+
+

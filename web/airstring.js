@@ -25,7 +25,7 @@ import { COMMANDS, DIRS, dirByte } from './commands.js';
  * In every other case `cloud` is null (or reports no user) and the
  * upload path below is the S5 local-stub behaviour, unchanged. */
 let cloud = null;
-try { cloud = (await import('./firebase.js?v=p2fix9')).default; }
+try { cloud = (await import('./firebase.js?v=p2fix10')).default; }
 catch (e) { cloud = null; }
 function cloudActive() { return !!(cloud && cloud.currentUser()); }
 
@@ -270,6 +270,7 @@ function parseGameDoc(doc) {
     lineageId: fsVal(f.lineageId) || null,
     provenance: fsVal(f.provenance) || null,
     status: fsVal(f.status) || 'verified',
+    visible: fsVal(f.visible) !== false,
     hiddenByOwner: !!fsVal(f.hiddenByOwner),
     seed: String(fsVal(f.seed) ?? '?'),
     seedSource: fsVal(f.seedSource) || 'given',
@@ -306,6 +307,7 @@ function normalizePlainGame(d) {
     lineageId: d.lineageId || null,
     provenance: d.provenance || null,
     status: d.status || 'pending',
+    visible: d.visible !== false,
     hiddenByOwner: !!d.hiddenByOwner,
     seed: String(d.seed ?? '?'),
     seedSource: d.seedSource || 'given',
@@ -577,7 +579,7 @@ async function loadVerifiedLobby(force = false) {
     verifiedGamesCache = rows
       .filter((x) => x.document && x.document.fields)
       .map((x) => parseGameDoc(x.document))
-      .filter((g) => !g.hiddenByOwner);
+      .filter((g) => !g.hiddenByOwner && g.visible !== false);
     if (!verifiedGamesCache.length) {
       box.innerHTML = '<div class="hint">暂无公开已验真对局，往下滚动开一局成为第一人！</div>';
       return;
