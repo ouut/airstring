@@ -145,7 +145,7 @@ function buildAsciiThumb(mapEv) {
   return Buffer.byteLength(json, 'utf8') <= 2048 ? json : null;
 }
 
-export function extractSummary(framesText, eventsText, header) {
+export function extractSummary(framesText, eventsInput, header) {
   let maxDlvl = 1;
   for (const m of String(framesText || '').matchAll(/\bdlevel=(\d+)/g)) {
     const d = parseInt(m[1], 10);
@@ -156,34 +156,43 @@ export function extractSummary(framesText, eventsText, header) {
   let lastMapAny = null;
   let sawRip = false;
   let sawQuest = false;
-  const recentMsgs = [];
-  const lastTexts = [];
+  let recentMsgs = [];
+  let lastTexts = [];
 
-  for (const line of String(eventsText || '').split('\n')) {
-    if (!line.trim()) continue;
-    let ev;
-    try { ev = JSON.parse(line); } catch (e) { continue; }
-    if (ev.t === 'map' && Array.isArray(ev.rows)) {
-      lastMapAny = ev;
-      if (ev.rows.some((r) => String(r).includes('@'))) {
-        lastMapWithHero = ev;
-      }
-    } else if (ev.t === 'rip') {
-      sawRip = true;
-    } else if ((ev.t === 'message' || ev.t === 'raw') && typeof ev.text === 'string') {
-      const txt = ev.text.trim();
-      if (txt) {
-        recentMsgs.push(txt);
-        if (recentMsgs.length > 20) recentMsgs.shift();
-        if (/quest|nemesis|bell of opening|candelabrum/i.test(txt)) sawQuest = true;
-      }
-    } else if (ev.t === 'text' && Array.isArray(ev.lines)) {
-      const lines = ev.lines
-        .map((l) => (typeof l === 'string' ? l : (l && l.text) || '').trim())
-        .filter(Boolean);
-      if (lines.length) {
-        lastTexts.push(lines);
-        if (lastTexts.length > 4) lastTexts.shift();
+  if (eventsInput && typeof eventsInput === 'object') {
+    lastMapWithHero = eventsInput.lastMapWithHero || null;
+    lastMapAny = eventsInput.lastMapAny || null;
+    sawRip = !!eventsInput.sawRip;
+    sawQuest = !!eventsInput.sawQuest;
+    recentMsgs = Array.isArray(eventsInput.recentMsgs) ? eventsInput.recentMsgs : [];
+    lastTexts = Array.isArray(eventsInput.lastTexts) ? eventsInput.lastTexts : [];
+  } else {
+    for (const line of String(eventsInput || '').split('\n')) {
+      if (!line.trim()) continue;
+      let ev;
+      try { ev = JSON.parse(line); } catch (e) { continue; }
+      if (ev.t === 'map' && Array.isArray(ev.rows)) {
+        lastMapAny = ev;
+        if (ev.rows.some((r) => String(r).includes('@'))) {
+          lastMapWithHero = ev;
+        }
+      } else if (ev.t === 'rip') {
+        sawRip = true;
+      } else if ((ev.t === 'message' || ev.t === 'raw') && typeof ev.text === 'string') {
+        const txt = ev.text.trim();
+        if (txt) {
+          recentMsgs.push(txt);
+          if (recentMsgs.length > 20) recentMsgs.shift();
+          if (/quest|nemesis|bell of opening|candelabrum/i.test(txt)) sawQuest = true;
+        }
+      } else if (ev.t === 'text' && Array.isArray(ev.lines)) {
+        const lines = ev.lines
+          .map((l) => (typeof l === 'string' ? l : (l && l.text) || '').trim())
+          .filter(Boolean);
+        if (lines.length) {
+          lastTexts.push(lines);
+          if (lastTexts.length > 4) lastTexts.shift();
+        }
       }
     }
   }
@@ -234,7 +243,7 @@ export function replay(root, { seed, date, options, keys },
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'airstring-verify-'));
     const keysFile = path.join(tmp, 'keys.bin');
     const outPrefix = path.join(tmp, 'replay');
-    const eventsFile = path.join(tmp, 'events.jsonl');
+    const summaryFile = path.join(tmp, 'events-summary.json');
     fs.writeFileSync(keysFile, keys);
     const child = spawn('node', [
       path.join(root, 'tools', 'run-node-s3.mjs'),
@@ -244,7 +253,7 @@ export function replay(root, { seed, date, options, keys },
       '--date', String(date),
       '--options', String(options),
       '--out', outPrefix,
-      '--events', eventsFile,
+      '--events-summary', summaryFile,
       '--quiet-keys',
     ], { cwd: root });
     let log = '';
@@ -259,12 +268,14 @@ export function replay(root, { seed, date, options, keys },
       clearTimeout(timer);
       try {
         const frames = fs.readFileSync(outPrefix + '.frames', 'utf8');
-        let eventsText = '';
-        try { eventsText = fs.readFileSync(eventsFile, 'utf8'); } catch (_) { }
+        let eventsSummary = null;
+        try {
+          eventsSummary = JSON.parse(fs.readFileSync(summaryFile, 'utf8'));
+        } catch (_) { }
         resolve({
           hashes: frameHashes(frames),
           framesText: frames,
-          eventsText,
+          eventsSummary,
           exitCode: code,
           log,
         });
@@ -344,7 +355,7 @@ export async function verifyRecording(text, { root }) {
       reason: 'hash-mismatch at frame ' + base.firstMismatch.frame +
         ' (turn ' + base.firstMismatch.turn + ')',
     };
-  const summary = extractSummary(rep.framesText, rep.eventsText, header);
+  const summary = extractSummary(rep.framesText, rep.eventsSummary, header);
   return {
     ...base,
     ...summary,

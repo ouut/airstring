@@ -25,7 +25,7 @@ import { COMMANDS, DIRS, dirByte } from './commands.js';
  * In every other case `cloud` is null (or reports no user) and the
  * upload path below is the S5 local-stub behaviour, unchanged. */
 let cloud = null;
-try { cloud = (await import('./firebase.js?v=p2fix4')).default; }
+try { cloud = (await import('./firebase.js?v=p2fix5')).default; }
 catch (e) { cloud = null; }
 function cloudActive() { return !!(cloud && cloud.currentUser()); }
 
@@ -193,6 +193,11 @@ function parseGameDoc(doc) {
   return {
     gameId,
     uid: fsVal(f.uid) || null,
+    displayName: fsVal(f.displayName) || null,
+    source: fsVal(f.source) || null,
+    batch: fsVal(f.batch) || null,
+    lineageId: fsVal(f.lineageId) || null,
+    provenance: fsVal(f.provenance) || null,
     status: fsVal(f.status) || 'verified',
     hiddenByOwner: !!fsVal(f.hiddenByOwner),
     seed: String(fsVal(f.seed) ?? '?'),
@@ -224,6 +229,11 @@ function normalizePlainGame(d) {
   return {
     gameId: d.gameId || d.id || '',
     uid: d.uid || null,
+    displayName: d.displayName || null,
+    source: d.source || null,
+    batch: d.batch || null,
+    lineageId: d.lineageId || null,
+    provenance: d.provenance || null,
     status: d.status || 'pending',
     hiddenByOwner: !!d.hiddenByOwner,
     seed: String(d.seed ?? '?'),
@@ -351,7 +361,8 @@ function buildGalleryCard(g, fromPage) {
   const top = document.createElement('div');
   top.className = 'vgame-top';
   const title = document.createElement('span');
-  title.textContent = `${roleZh} · ${g.name}`;
+  const who = g.displayName || g.name;
+  title.textContent = `${roleZh} · ${who}`;
   top.appendChild(title);
   if (g.parentGameId) {
     const fb = document.createElement('span');
@@ -387,7 +398,7 @@ function buildGalleryCard(g, fromPage) {
     bDel.textContent = '删除';
     bDel.addEventListener('click', async (e) => {
       e.stopPropagation();
-      if (!confirm(`确定删除（隐藏）「${roleZh} · ${g.name}（T${g.turns}）」？隐藏后将不再在大厅和对局列表显示。`)) return;
+      if (!confirm(`确定删除（隐藏）「${roleZh} · ${who}（T${g.turns}）」？隐藏后将不再在大厅和对局列表显示。`)) return;
       try {
         await cloud.softDeleteGame(g.gameId);
         verifiedGamesCache = verifiedGamesCache.filter((x) => x.gameId !== g.gameId);
@@ -426,7 +437,7 @@ function renderVerifiedGallery() {
     if (roleF !== 'all' && g.roleKey !== roleF) return false;
     if (q) {
       const roleZh = (ROLES[g.roleKey] && ROLES[g.roleKey].zh) || '';
-      const hay = `${g.name} ${g.roleKey} ${roleZh} ${g.seed} ${g.gameId} ${g.deathReason || ''}`.toLowerCase();
+      const hay = `${g.displayName || ''} ${g.name} ${g.roleKey} ${roleZh} ${g.seed} ${g.gameId} ${g.deathReason || ''} ${g.batch || ''} ${g.lineageId || ''}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -485,7 +496,7 @@ async function loadVerifiedLobby(force = false) {
             },
           },
           orderBy: [{ field: { fieldPath: 'createdAt' }, direction: 'DESCENDING' }],
-          limit: 24,
+          limit: 100,
         },
       }),
     });
@@ -2957,11 +2968,22 @@ function renderReplayPassport(g) {
   };
   const roleZh = (ROLES[g.roleKey] && ROLES[g.roleKey].zh) || g.roleKey;
   kv('状态', `✓ 已验真（${g.framesMatched}/${g.framesCompared} 帧）`);
+  if (g.displayName) kv('玩家', g.displayName);
   kv('角色', `${g.name} · ${roleZh}`);
   kv('种子', `#${g.seed}（${g.seedSource}）`);
   kv('最深层数', g.maxDlvl ? `Dlvl ${g.maxDlvl}` : 'Dlvl 1');
   kv('结局', g.outcome === 'ascended' ? '🏆 飞升' : g.outcome === 'died' ? '💀 阵亡' : '退出/结束');
   if (g.deathReason) kv('战报', g.deathReason);
+  if (g.batch) kv('批次', g.batch + (g.provenance ? ` (${g.provenance})` : ''));
+  if (g.lineageId) {
+    const linSpan = document.createElement('span');
+    linSpan.className = 'v';
+    linSpan.title = g.lineageId;
+    linSpan.textContent = g.lineageId.length > 26
+      ? g.lineageId.slice(0, 10) + '…' + g.lineageId.slice(-14)
+      : g.lineageId;
+    kv('谱系', '', linSpan);
+  }
   if (g.recordingSha256) kv('SHA-256', g.recordingSha256.slice(0, 16) + '…');
   if (g.parentGameId) {
     const pBtn = document.createElement('button');
@@ -3098,7 +3120,7 @@ async function openReplay(gameDoc, opts = {}) {
   }
 
   const roleZh = (ROLES[gameDoc.roleKey] && ROLES[gameDoc.roleKey].zh) || gameDoc.roleKey;
-  $('rep-title').textContent = `${gameDoc.name} · ${roleZh} · 种子 #${gameDoc.seed}`;
+  $('rep-title').textContent = `${gameDoc.displayName || gameDoc.name} · ${roleZh} · 种子 #${gameDoc.seed}`;
   $('rep-badge').textContent = snapshot ? `进行中 · T${gameDoc.turns}`
     : gameDoc.status === 'pending' ? '⏳ 待验真（本人录像）'
     : gameDoc.outcome === 'ascended' ? '🏆 飞升 · 已验真'

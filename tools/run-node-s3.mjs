@@ -61,6 +61,7 @@ const options = arg('options',
     'name:fleck,role:valkyrie,race:human,gender:female,align:neutral');
 const outPrefix = arg('out', null);
 const eventsPath = arg('events', null);
+const eventsSummaryPath = arg('events-summary', null);
 const savesDir = arg('saves', null);
 const quietKeys = argv.includes('--quiet-keys');
 const chunkSize = parseInt(arg('chunk', '8192'), 10);
@@ -71,10 +72,64 @@ const keysBytes = fs.readFileSync(keysPath);
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+const summaryOnly = !!(eventsSummaryPath && !eventsPath);
 const events = [];
+const evSummary = {
+    lastMapWithHero: null,
+    lastMapAny: null,
+    sawRip: false,
+    sawQuest: false,
+    recentMsgs: [],
+    lastTexts: [],
+    eventCount: 0,
+};
 globalThis.__airstring_event = (json) => {
     if (quietKeys && json.startsWith('{"t":"key"'))
         return;
+    if (summaryOnly) {
+        evSummary.eventCount++;
+        if (json.startsWith('{"t":"map"')) {
+            try {
+                const ev = JSON.parse(json);
+                if (Array.isArray(ev.rows)) {
+                    evSummary.lastMapAny = ev;
+                    if (ev.rows.some((r) => String(r).includes('@'))) {
+                        evSummary.lastMapWithHero = ev;
+                    }
+                }
+            } catch (_) { }
+        } else if (json.startsWith('{"t":"rip"')) {
+            evSummary.sawRip = true;
+        } else if (json.startsWith('{"t":"message"') || json.startsWith('{"t":"raw"')) {
+            try {
+                const ev = JSON.parse(json);
+                if (typeof ev.text === 'string') {
+                    const txt = ev.text.trim();
+                    if (txt) {
+                        evSummary.recentMsgs.push(txt);
+                        if (evSummary.recentMsgs.length > 20) evSummary.recentMsgs.shift();
+                        if (/quest|nemesis|bell of opening|candelabrum/i.test(txt)) {
+                            evSummary.sawQuest = true;
+                        }
+                    }
+                }
+            } catch (_) { }
+        } else if (json.startsWith('{"t":"text"')) {
+            try {
+                const ev = JSON.parse(json);
+                if (Array.isArray(ev.lines)) {
+                    const lines = ev.lines
+                        .map((l) => (typeof l === 'string' ? l : (l && l.text) || '').trim())
+                        .filter(Boolean);
+                    if (lines.length) {
+                        evSummary.lastTexts.push(lines);
+                        if (evSummary.lastTexts.length > 4) evSummary.lastTexts.shift();
+                    }
+                }
+            } catch (_) { }
+        }
+        return;
+    }
     events.push(json);
 };
 
@@ -86,8 +141,8 @@ globalThis.__airstring_game_over = (code) => gameOverResolve(code);
 /* push-stream collectors (pre-s3.js keeps these if predefined) */
 const frameChunks = [];
 const rngChunks = [];
-globalThis.__airstring_frame = (text) => frameChunks.push(text);
-globalThis.__airstring_rngline = (line) => rngChunks.push(line);
+globalThis.__airstring_frame = (text) => { if (!summaryOnly) frameChunks.push(text); };
+globalThis.__airstring_rngline = (line) => { if (!summaryOnly) rngChunks.push(line); };
 
 if (mode === 'queue') {
     globalThis.__airstring_key_queue =
@@ -99,7 +154,7 @@ if (mode === 'queue') {
 globalThis.__airstring_config = {
     seed, date, options, mode,
     exportPath: '/fleck.frames',
-    rngPath: '/fleck.rng',
+    rngPath: summaryOnly ? undefined : '/fleck.rng',
     keysBase64: mode === 'replay'
         ? Buffer.from(keysBytes).toString('base64') : undefined,
 };
@@ -166,32 +221,44 @@ console.log('[harness] mode:', mode,
                 ? globalThis.__airstring_key_queue.pos : '(replay)',
             ' key waits (suspensions):', globalThis.__airstring_key_waits);
 
-if (eventsPath)
+if (eventsSummaryPath) {
+    fs.writeFileSync(eventsSummaryPath, JSON.stringify(evSummary));
+    console.log('[harness] events-summary:', evSummary.eventCount, '->', eventsSummaryPath);
+}
+if (eventsPath) {
     fs.writeFileSync(eventsPath, events.join('\n') + '\n');
-console.log('[harness] events:', events.length,
-            eventsPath ? '-> ' + eventsPath : '');
+    console.log('[harness] events:', events.length, '->', eventsPath);
+} else if (!eventsSummaryPath) {
+    console.log('[harness] events:', events.length);
+}
 
 /* canonical MEMFS record vs push-streamed copy */
-const streamed = {
-    '.frames': Buffer.from(frameChunks.join(''), 'utf8'),
-    '.rng': Buffer.from(rngChunks.join(''), 'utf8'),
-};
-for (const [memPath, suffix] of [['/fleck.frames', '.frames'],
-                                 ['/fleck.rng', '.rng']]) {
-    try {
-        const data = M.FS.readFile(memPath);
-        const lines = data.length
-            ? Buffer.from(data).toString('utf8').split('\n').length - 1 : 0;
-        console.log(`[harness] ${memPath}: ${data.length} bytes, ${lines} lines, sha256 ${sha256(data)}`);
-        console.log(`[harness] streamed${suffix}: ${streamed[suffix].length} bytes, sha256 ${sha256(streamed[suffix])}, identical-to-memfs: ${Buffer.from(data).equals(streamed[suffix])}`);
-        if (outPrefix) {
-            fs.writeFileSync(outPrefix + suffix, data);
-            fs.writeFileSync(outPrefix + '.stream' + suffix, streamed[suffix]);
+if (summaryOnly) {
+    const data = M.FS.readFile('/fleck.frames');
+    console.log(`[harness] /fleck.frames: ${data.length} bytes, sha256 ${sha256(data)}`);
+    if (outPrefix) fs.writeFileSync(outPrefix + '.frames', data);
+} else {
+    const streamed = {
+        '.frames': Buffer.from(frameChunks.join(''), 'utf8'),
+        '.rng': Buffer.from(rngChunks.join(''), 'utf8'),
+    };
+    for (const [memPath, suffix] of [['/fleck.frames', '.frames'],
+                                     ['/fleck.rng', '.rng']]) {
+        try {
+            const data = M.FS.readFile(memPath);
+            const lines = data.length
+                ? Buffer.from(data).toString('utf8').split('\n').length - 1 : 0;
+            console.log(`[harness] ${memPath}: ${data.length} bytes, ${lines} lines, sha256 ${sha256(data)}`);
+            console.log(`[harness] streamed${suffix}: ${streamed[suffix].length} bytes, sha256 ${sha256(streamed[suffix])}, identical-to-memfs: ${Buffer.from(data).equals(streamed[suffix])}`);
+            if (outPrefix) {
+                fs.writeFileSync(outPrefix + suffix, data);
+                fs.writeFileSync(outPrefix + '.stream' + suffix, streamed[suffix]);
+            }
+        } catch (e) {
+            console.log(`[harness] ${memPath}: not readable (${e.message}); streamed${suffix}: ${streamed[suffix].length} bytes`);
+            if (outPrefix)
+                fs.writeFileSync(outPrefix + '.stream' + suffix, streamed[suffix]);
         }
-    } catch (e) {
-        console.log(`[harness] ${memPath}: not readable (${e.message}); streamed${suffix}: ${streamed[suffix].length} bytes`);
-        if (outPrefix)
-            fs.writeFileSync(outPrefix + '.stream' + suffix, streamed[suffix]);
     }
 }
 
