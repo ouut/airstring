@@ -154,7 +154,7 @@ if (mode === 'queue') {
 globalThis.__airstring_config = {
     seed, date, options, mode,
     exportPath: '/fleck.frames',
-    rngPath: summaryOnly ? undefined : '/fleck.rng',
+    rngPath: summaryOnly ? '/dev/null' : '/fleck.rng',
     keysBase64: mode === 'replay'
         ? Buffer.from(keysBytes).toString('base64') : undefined,
 };
