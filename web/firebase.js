@@ -255,6 +255,9 @@ try {
             parentGameId: snapshot.parentGameId || null,
             forkTurn: snapshot.forkTurn != null ? snapshot.forkTurn : null,
           };
+          if (idx.deleted && idx.deleted[snapshot.gameId]) {
+            delete idx.deleted[snapshot.gameId];
+          }
           await putActiveIndexInternal(idx);
         });
         await indexOpChain;
@@ -275,10 +278,20 @@ try {
           if (!user || user.uid !== uid) return;
           try {
             const idx = await getActiveIndexInternal(true);
+            let changed = false;
             if (idx.games && idx.games[gameId]) {
               delete idx.games[gameId];
-              await putActiveIndexInternal(idx);
+              changed = true;
             }
+            if (!idx.deleted || typeof idx.deleted !== 'object') idx.deleted = {};
+            idx.deleted[gameId] = new Date().toISOString();
+            const delKeys = Object.keys(idx.deleted);
+            if (delKeys.length > 200) {
+              delKeys.sort((a, b) => String(idx.deleted[a] || '').localeCompare(String(idx.deleted[b] || '')));
+              for (const oldKey of delKeys.slice(0, delKeys.length - 200)) delete idx.deleted[oldKey];
+            }
+            changed = true;
+            if (changed) await putActiveIndexInternal(idx);
           } catch (_) { /* best-effort */ }
         });
         await indexOpChain;

@@ -25,7 +25,7 @@ import { COMMANDS, DIRS, dirByte } from './commands.js';
  * In every other case `cloud` is null (or reports no user) and the
  * upload path below is the S5 local-stub behaviour, unchanged. */
 let cloud = null;
-try { cloud = (await import('./firebase.js?v=p2fix8')).default; }
+try { cloud = (await import('./firebase.js?v=p2fix9')).default; }
 catch (e) { cloud = null; }
 function cloudActive() { return !!(cloud && cloud.currentUser()); }
 
@@ -2061,15 +2061,17 @@ function findCommonPrefixTurns(recordsA, recordsB) {
   const turnsA = (recordsA || []).filter((r) => r && r.k === 'turn');
   const turnsB = (recordsB || []).filter((r) => r && r.k === 'turn');
   const n = Math.min(turnsA.length, turnsB.length);
-  let common = 0;
+  let commonCount = 0;
+  let commonTurn = 0;
   for (let i = 0; i < n; i++) {
     if (turnsA[i].hash === turnsB[i].hash && turnsA[i].keys === turnsB[i].keys) {
-      common = turnsA[i].turn || (i + 1);
+      commonCount = i + 1;
+      commonTurn = turnsA[i].turn || (i + 1);
     } else {
       break;
     }
   }
-  return { common, lenA: turnsA.length, lenB: turnsB.length };
+  return { commonCount, commonTurn, lenA: turnsA.length, lenB: turnsB.length };
 }
 
 function updateSeedBanner() {
@@ -2140,15 +2142,22 @@ function syncActiveToCloud(force) {
     if (sess.over || sess.tabLocked) return;
     let snap = buildActiveSnapshot(sess);
     try {
-      /* Cross-device conflict check -> automatic in-place fork */
+      /* Cross-device conflict check -> automatic in-place fork ONLY on genuine divergence */
       const remote = await cloud.loadActiveGame(sess.id);
-      if (remote && remote.sessionId && remote.sessionId !== sess.sessionId) {
+      if (remote && !remote.deleted && remote.sessionId && remote.sessionId !== sess.sessionId) {
         const cmp = findCommonPrefixTurns(remote.records, snap.records);
-        const remoteBehindOrSame = cmp.lenA <= cmp.lenB && cmp.common === cmp.lenA;
+        const remoteBehindOrSame = cmp.lenA <= cmp.lenB && cmp.commonCount === cmp.lenA;
+        const localStrictlyBehind = cmp.lenB < cmp.lenA && cmp.commonCount === cmp.lenB;
+        if (localStrictlyBehind) {
+          /* Remote is strictly ahead with no local divergence; keep remote intact without spawning a duplicate fork */
+          sess.cloudSyncStatus = `云端已有更新进度（第 ${remote.turns || cmp.lenA} 回合），已跳过旧进度覆盖`;
+          if ($('game-drawer') && !$('game-drawer').hidden) updateDrawerSyncBanner();
+          return;
+        }
         if (!remoteBehindOrSame) {
           const oldGameId = sess.id;
           const newGameId = makeGameId(sess.seed);
-          const commonTurn = Math.max(0, cmp.common);
+          const commonTurn = Math.max(0, cmp.commonTurn);
           /* Keep remote copy locally under oldGameId so both timelines exist */
           await idbPutGame(uid, remote);
           /* Mutate current live session into forked timeline */
@@ -2170,7 +2179,7 @@ function syncActiveToCloud(force) {
           try { sessionStorage.setItem('airstring_last_active_game', newGameId); } catch (e) { }
           broadcastTabClaim(newGameId);
           updateSeedBanner();
-          showToast('检测到本局在另一设备推进，已自动将当前路线分叉保存为新局，两边进度均已保留！', 6000);
+          showToast('检测到本局在另一设备推进并产生分歧，已自动将当前路线分叉保存为新局，两边进度均已保留！', 6000);
         }
       }
       await cloud.saveActiveGame(snap);
@@ -2500,6 +2509,14 @@ async function fetchMergedActiveGames(uid, forceCloud) {
         cur.thumb = meta.thumb;
       }
     }
+    const deletedMap = (idx && idx.deleted) || {};
+    for (const [gid, delAt] of Object.entries(deletedMap)) {
+      const cur = merged.get(gid);
+      if (cur && cur._source === 'local' && (!cur.updatedAt || String(cur.updatedAt) <= String(delAt))) {
+        merged.delete(gid);
+        idbDeleteGame(uid, gid).catch(() => { });
+      }
+    }
   } catch (e) {
     cloudErr = true;
   }
@@ -2666,6 +2683,7 @@ async function loadBestSnapshot(uid, gameId) {
   try {
     if (cloudActive()) remote = await cloud.loadActiveGame(gameId);
   } catch (e) { }
+  if (remote && remote.deleted) remote = null;
   if (!local && !remote) return null;
   if (local && !remote) return local;
   if (!local && remote) return remote;
