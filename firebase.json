@@ -68,6 +68,10 @@
       {
         "source": "/index.html",
         "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      },
+      {
+        "source": "/help.html",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
       }
     ],
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],

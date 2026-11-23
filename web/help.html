@@ -1,0 +1,1285 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0d10">
+<title>帮助中心与 NetHack 新手完全指南 · airstring</title>
+<style>
+:root {
+  --bg: #0b0d10;
+  --panel: #10141b;
+  --panel2: #151b24;
+  --line: #222936;
+  --line-hi: #344055;
+  --fg: #d6dce6;
+  --fg-bright: #f4f7fc;
+  --dim: #8492a6;
+  --accent: #e5b54c;
+  --accent-bg: rgba(229, 181, 76, 0.12);
+  --ok: #3fb950;
+  --ok-fg: #7ee787;
+  --ok-bg: rgba(63, 185, 80, 0.12);
+  --info: #58a6ff;
+  --info-bg: rgba(88, 166, 255, 0.12);
+  --warn: #f0b840;
+  --warn-bg: rgba(240, 184, 64, 0.12);
+  --danger: #f06060;
+  --danger-bg: rgba(240, 96, 96, 0.12);
+  --mono: ui-monospace, "JetBrains Mono", "Cascadia Mono", "SFMono-Regular", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 68px; }
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  line-height: 1.72;
+  font-size: 15px;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ---------- Top Header ---------- */
+.help-header {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 18px;
+  background: rgba(14, 17, 22, 0.94);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line);
+}
+.help-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.badge-at {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 14px;
+  padding: 2px 7px;
+  border-radius: 2px;
+  background: var(--accent);
+  color: #140e02;
+}
+.help-brand-title {
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--fg-bright);
+  white-space: nowrap;
+}
+.help-brand-sub {
+  color: var(--dim);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.help-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.hdr-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 11px;
+  font-size: 13px;
+  border-radius: 3px;
+  border: 1px solid var(--line-hi);
+  background: var(--panel2);
+  color: var(--fg-bright);
+  cursor: pointer;
+  text-decoration: none;
+}
+.hdr-btn:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
+.hdr-btn.primary { background: var(--accent); color: #161002; border-color: var(--accent); font-weight: 600; }
+.hdr-btn.primary:hover { filter: brightness(1.08); color: #161002; }
+#btn-toc-toggle { display: none; }
+
+/* ---------- Layout ---------- */
+.help-shell {
+  max-width: 1260px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 270px minmax(0, 1fr);
+  gap: 24px;
+  padding: 20px 18px 60px;
+  align-items: start;
+}
+
+/* ---------- Sticky Sidebar TOC ---------- */
+.toc {
+  position: sticky;
+  top: 66px;
+  max-height: calc(100vh - 82px);
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 14px 12px;
+}
+.toc-search-wrap {
+  margin-bottom: 12px;
+}
+#help-search {
+  width: 100%;
+  padding: 8px 10px;
+  background: #090c10;
+  border: 1px solid var(--line-hi);
+  border-radius: 3px;
+  color: var(--fg-bright);
+  font-size: 13px;
+  outline: none;
+}
+#help-search:focus { border-color: var(--accent); }
+#search-meta {
+  font-size: 11px;
+  color: var(--dim);
+  margin-top: 5px;
+  min-height: 16px;
+}
+.toc-group-title {
+  font-size: 11px;
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--dim);
+  margin: 12px 6px 5px;
+}
+.toc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.toc-list a {
+  display: block;
+  padding: 5px 8px;
+  border-radius: 3px;
+  font-size: 13px;
+  color: var(--fg);
+  border-left: 2px solid transparent;
+}
+.toc-list a:hover {
+  background: var(--panel2);
+  color: var(--fg-bright);
+  text-decoration: none;
+}
+.toc-list a.active {
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-left-color: var(--accent);
+  font-weight: 600;
+}
+.toc-sub {
+  padding-left: 14px;
+}
+.toc-sub a {
+  font-size: 12.5px;
+  color: var(--dim);
+  padding: 3.5px 8px;
+}
+
+/* ---------- Main Content ---------- */
+.doc {
+  min-width: 0;
+}
+.hero-card {
+  background: linear-gradient(135deg, #131924 0%, #0d1117 100%);
+  border: 1px solid var(--line-hi);
+  border-radius: 4px;
+  padding: 24px 26px;
+  margin-bottom: 22px;
+}
+.hero-kicker {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+.hero-card h1 {
+  margin: 0 0 10px;
+  font-size: 26px;
+  color: var(--fg-bright);
+  line-height: 1.3;
+}
+.hero-card p {
+  margin: 0 0 16px;
+  color: var(--fg);
+  font-size: 15px;
+}
+.quick-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.quick-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  background: var(--panel2);
+  border: 1px solid var(--line-hi);
+  color: var(--fg-bright);
+}
+.quick-pill:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.section-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 24px 26px;
+  margin-bottom: 20px;
+}
+.section-card h2 {
+  margin: 0 0 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: 20px;
+  color: var(--fg-bright);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.section-card h3 {
+  margin: 22px 0 10px;
+  font-size: 16px;
+  color: var(--accent);
+}
+.section-card h4 {
+  margin: 16px 0 6px;
+  font-size: 14.5px;
+  color: var(--fg-bright);
+}
+.section-card p { margin: 0 0 11px; }
+.section-card ul, .section-card ol {
+  margin: 0 0 12px;
+  padding-left: 22px;
+}
+.section-card li { margin-bottom: 6px; }
+
+/* ---------- Callouts ---------- */
+.callout {
+  border-radius: 3px;
+  padding: 12px 14px;
+  margin: 14px 0;
+  border: 1px solid var(--line-hi);
+  border-left-width: 3px;
+  font-size: 14px;
+}
+.callout strong.c-title { display: block; margin-bottom: 4px; }
+.callout.tip { background: var(--ok-bg); border-color: rgba(63, 185, 80, 0.35); border-left-color: var(--ok); }
+.callout.tip strong.c-title { color: var(--ok-fg); }
+.callout.info { background: var(--info-bg); border-color: rgba(88, 166, 255, 0.35); border-left-color: var(--info); }
+.callout.info strong.c-title { color: #8cc4ff; }
+.callout.warn { background: var(--warn-bg); border-color: rgba(240, 184, 64, 0.35); border-left-color: var(--warn); }
+.callout.warn strong.c-title { color: var(--warn); }
+.callout.danger { background: var(--danger-bg); border-color: rgba(240, 96, 96, 0.38); border-left-color: var(--danger); }
+.callout.danger strong.c-title { color: #ff8e8e; }
+
+/* ---------- Grids & Feature Cards ---------- */
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 14px 0;
+}
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 14px 0;
+}
+.mini-card {
+  background: #0c1016;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 13px 14px;
+}
+.mini-card h4 {
+  margin: 0 0 6px;
+  font-size: 14.5px;
+  color: var(--fg-bright);
+}
+.mini-card p {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--fg);
+}
+
+/* ---------- Tables ---------- */
+.tbl-wrap {
+  overflow-x: auto;
+  margin: 12px 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+  background: #0c1016;
+}
+th, td {
+  text-align: left;
+  padding: 9px 11px;
+  border-bottom: 1px solid #1b222e;
+  vertical-align: top;
+}
+th {
+  background: #131924;
+  color: var(--fg-bright);
+  font-weight: 600;
+  white-space: nowrap;
+}
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: rgba(255, 255, 255, 0.02); }
+
+/* ---------- KBD & Inline Code ---------- */
+kbd {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.25;
+  padding: 2px 6px;
+  color: var(--fg-bright);
+  background: #1a2130;
+  border: 1px solid #3c4860;
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+code {
+  font-family: var(--mono);
+  font-size: 12.8px;
+  background: #161d29;
+  color: #f2cc73;
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+pre.ascii-box {
+  background: #000;
+  border: 1px solid var(--line-hi);
+  border-radius: 3px;
+  padding: 13px 15px;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+  color: #d6dce6;
+  overflow-x: auto;
+  margin: 12px 0;
+}
+
+/* ---------- Compass 3x3 ---------- */
+.compass-pair {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin: 14px 0;
+}
+.compass-box {
+  background: #0c1016;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 12px 14px;
+  flex: 1 1 240px;
+}
+.compass-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 10px;
+}
+.compass-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  max-width: 240px;
+}
+.compass-cell {
+  background: #141a24;
+  border: 1px solid var(--line-hi);
+  border-radius: 3px;
+  padding: 8px 4px;
+  text-align: center;
+  font-family: var(--mono);
+}
+.compass-cell .k { display: block; font-size: 15px; font-weight: 700; color: var(--fg-bright); }
+.compass-cell .d { display: block; font-size: 11px; color: var(--dim); margin-top: 2px; }
+.compass-cell.center { background: var(--accent-bg); border-color: var(--accent); }
+.compass-cell.center .k { color: var(--accent); }
+
+/* ---------- Glyph Colors ---------- */
+.glyph {
+  display: inline-block;
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 15px;
+  width: 22px;
+  text-align: center;
+  background: #000;
+  border: 1px solid #262f40;
+  border-radius: 2px;
+  line-height: 22px;
+}
+.g-white { color: #fff; }
+.g-gold { color: #ffd95e; }
+.g-cyan { color: #56e0f5; }
+.g-green { color: #67e480; }
+.g-red { color: #ff6b6b; }
+.g-blue { color: #6ca6ff; }
+.g-mag { color: #e28bff; }
+.g-brown { color: #c89458; }
+.g-gray { color: #9ea7b8; }
+
+/* ---------- Step List ---------- */
+.steps {
+  list-style: none;
+  padding: 0 !important;
+  margin: 12px 0;
+  counter-reset: stepnum;
+}
+.steps > li {
+  counter-increment: stepnum;
+  position: relative;
+  padding: 11px 14px 11px 46px;
+  background: #0c1016;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  margin-bottom: 9px;
+}
+.steps > li::before {
+  content: counter(stepnum);
+  position: absolute;
+  left: 12px;
+  top: 11px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---------- Search Highlight & Filter ---------- */
+.search-hidden { display: none !important; }
+mark.hl {
+  background: rgba(229, 181, 76, 0.35);
+  color: #fff;
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+/* ---------- Footer ---------- */
+.help-footer {
+  text-align: center;
+  padding: 20px 16px 36px;
+  color: var(--dim);
+  font-size: 13px;
+  border-top: 1px solid var(--line);
+}
+
+/* ---------- Responsive ---------- */
+@media (max-width: 920px) {
+  .help-shell {
+    grid-template-columns: 1fr;
+    padding: 14px 12px 48px;
+  }
+  #btn-toc-toggle { display: inline-flex; }
+  .toc {
+    position: fixed;
+    top: 52px;
+    left: 0;
+    right: 0;
+    max-height: 75vh;
+    z-index: 28;
+    border-radius: 0 0 6px 6px;
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.65);
+    display: none;
+  }
+  .toc.open { display: block; }
+  .grid-3, .grid-2 { grid-template-columns: 1fr; }
+  .section-card, .hero-card { padding: 18px 15px; }
+  .help-brand-sub { display: none; }
+}
+</style>
+</head>
+<body>
+
+<header class="help-header">
+  <div class="help-brand">
+    <span class="badge-at">@</span>
+    <span class="help-brand-title">airstring 帮助中心</span>
+    <span class="help-brand-sub">NetHack 3.6.7 · 完整文档、快捷键与新手指南</span>
+  </div>
+  <div class="help-header-actions">
+    <button id="btn-toc-toggle" type="button" class="hdr-btn">☰ 目录</button>
+    <a class="hdr-btn" href="./index.html#new">⚔ 开新局</a>
+    <a class="hdr-btn primary" href="./index.html">← 返回大厅</a>
+  </div>
+</header>
+
+<div class="help-shell">
+  <aside id="toc" class="toc" aria-label="文档目录">
+    <div class="toc-search-wrap">
+      <input id="help-search" type="search" placeholder="搜索文档（如：祈祷 / 分叉 / Elbereth / 小键盘）…" autocomplete="off">
+      <div id="search-meta">共 6 大章节 · 支持关键词即时定位</div>
+    </div>
+
+    <div class="toc-group-title">一、认识 airstring</div>
+    <ul class="toc-list">
+      <li><a href="#what-is">1. 这个项目是干什么的？</a></li>
+      <li class="toc-sub"><a href="#core-pillars">三大核心特性（种子 / 验真 / 分叉）</a></li>
+      <li class="toc-sub"><a href="#account-modes">游客试玩 vs Google 登录</a></li>
+    </ul>
+
+    <div class="toc-group-title">二、平台使用指南</div>
+    <ul class="toc-list">
+      <li><a href="#how-to-use">2. 怎么玩 &amp; 界面全流程</a></li>
+      <li class="toc-sub"><a href="#new-game-guide">开新局、种子与老玩家选项</a></li>
+      <li class="toc-sub"><a href="#save-resume">自动保存、续打与防冲突</a></li>
+      <li class="toc-sub"><a href="#desktop-mobile">桌面端与手机竖屏体验</a></li>
+    </ul>
+
+    <div class="toc-group-title">三、airstring 增强功能</div>
+    <ul class="toc-list">
+      <li><a href="#features">3. 站内专属增强功能详解</a></li>
+      <li class="toc-sub"><a href="#feat-danger">高危保护盾 &amp; 异常状态徽章</a></li>
+      <li class="toc-sub"><a href="#feat-cursor">远视/寻路准星 &amp; # 命令补全</a></li>
+      <li class="toc-sub"><a href="#feat-notes">随局记事本 &amp; 300 回合祈祷计时</a></li>
+      <li class="toc-sub"><a href="#feat-dumplog">完整战报 (Dumplog) 与一键分享</a></li>
+    </ul>
+
+    <div class="toc-group-title">四、回放、窥视与分叉</div>
+    <ul class="toc-list">
+      <li><a href="#replay-fork">4. 录像回放与任意回合分叉</a></li>
+      <li class="toc-sub"><a href="#replay-theater">录像放映厅与回合锚点留言</a></li>
+      <li class="toc-sub"><a href="#replay-inspector">暂停深度查看器（零分叉查全套信息）</a></li>
+      <li class="toc-sub"><a href="#fork-mechanism">任意回合分叉与分叉家族树</a></li>
+    </ul>
+
+    <div class="toc-group-title">五、快捷键大全</div>
+    <ul class="toc-list">
+      <li><a href="#shortcuts">5. 快捷键全景速查表</a></li>
+      <li class="toc-sub"><a href="#keys-move">移动、奔跑与寻路（vi / 小键盘）</a></li>
+      <li class="toc-sub"><a href="#keys-action">环境交互、背包、消耗品与魔法</a></li>
+      <li class="toc-sub"><a href="#keys-ext">扩展命令 (#) / Alt Meta / 防浏览器劫持</a></li>
+      <li class="toc-sub"><a href="#keys-replay">录像放映厅快捷键</a></li>
+    </ul>
+
+    <div class="toc-group-title">六、NetHack 新手教程</div>
+    <ul class="toc-list">
+      <li><a href="#beginner">6. NetHack 3.6.7 新手完全教材</a></li>
+      <li class="toc-sub"><a href="#nh-basics">6.1 游戏目标与核心铁律</a></li>
+      <li class="toc-sub"><a href="#nh-glyphs">6.2 字符地图与符号速读图鉴</a></li>
+      <li class="toc-sub"><a href="#nh-class">6.3 第一局怎么选职业？</a></li>
+      <li class="toc-sub"><a href="#nh-first500">6.4 开局前 500 回合手把手攻略</a></li>
+      <li class="toc-sub"><a href="#nh-buc">6.5 BUC（祝福/诅咒）与三大免费鉴定法</a></li>
+      <li class="toc-sub"><a href="#nh-elbereth">6.6 救命神咒 Elbereth 与脱险心法</a></li>
+      <li class="toc-sub"><a href="#nh-yasd">6.7 新手十大经典死法避坑清单</a></li>
+      <li class="toc-sub"><a href="#nh-roadmap">6.8 地牢 1–20 层里程碑路线图</a></li>
+      <li class="toc-sub"><a href="#nh-grow">6.9 如何用 airstring 快速变强</a></li>
+    </ul>
+  </aside>
+
+  <main class="doc" id="doc-content">
+    <section class="hero-card">
+      <div class="hero-kicker">AIRSTRING · NETHACK 3.6.7 DOCUMENTATION &amp; HANDBOOK</div>
+      <h1>airstring 完整帮助中心与 NetHack 新手完全指南</h1>
+      <p>
+        无论你是刚点开网页、第一次见到满屏 ASCII 字符的新手，还是打了十年 NetHack、想摸清本站 <strong>确定性验真 / 录像窥视 / 任意回合分叉 / 快捷键增强</strong> 的老玩家，这一页已经把全部内容写透。左侧支持关键词即时搜索。
+      </p>
+      <div class="quick-pills">
+        <a class="quick-pill" href="#what-is">🎯 项目是干什么的</a>
+        <a class="quick-pill" href="#how-to-use">🚀 3 分钟上手本站</a>
+        <a class="quick-pill" href="#features">🛠 站内增强功能</a>
+        <a class="quick-pill" href="#replay-fork">🎬 回放与分叉</a>
+        <a class="quick-pill" href="#shortcuts">⌨️ 快捷键速查表</a>
+        <a class="quick-pill" href="#beginner">🛡️ NetHack 新手教程</a>
+      </div>
+    </section>
+
+    <!-- ==================== 1. 项目介绍 ==================== -->
+    <article class="section-card" id="what-is">
+      <h2>一、airstring 是干什么的？</h2>
+      <p>
+        <strong>airstring</strong> 是一个运行在浏览器里的 <strong>WebAssembly（WASM）纯字符版 NetHack 3.6.7 确定性可验真对局与回放社区</strong>。你不需要安装客户端、不用配 SSH 或 Telnet，打开浏览器（电脑或手机都可以）就能直接玩到 100% 原汁原味的 NetHack 3.6.7，并且每一局都有完整的「可复现、可验真、可回放、可分叉」能力。
+      </p>
+
+      <h3 id="core-pillars">1.1 三大核心特性</h3>
+      <div class="grid-3">
+        <div class="mini-card">
+          <h4>🎲 固定种子 · 确定性世界</h4>
+          <p>
+            每一局都有 64 位整数种子（可指定、可随机隐藏局终揭晓），并钉死游戏内日期（月相恒定）、关闭 bones 文件、禁用 wizard/explore 模式。相同种子＋相同角色选项，整座 50 层地牢完全一致，真正支持「同题公平竞技」。
+          </p>
+        </div>
+        <div class="mini-card">
+          <h4>✅ 按键流录制 · 逐帧哈希验真</h4>
+          <p>
+            本站不上传容易被篡改的二进制存档，而是完整记录你从第 1 键到终局的原始按键流与逐帧画面哈希链。对局结束后自动由云端独立验真器无头重放复现每一帧哈希，全部一致才翻为「已验真」并公开入榜。
+          </p>
+        </div>
+        <div class="mini-card">
+          <h4>🎬 像视频一样回放 · 任意回合分叉</h4>
+          <p>
+            每一局已验真录像都能拖动进度条逐帧回看、暂停查完整背包与袋内物品，还能在<strong>任意一个回合点击「⚡ 分叉」</strong>由你接管继续打下去——复盘自己死前一步，或者接管 AI / 大佬的深层神仙残局。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout info">
+        <strong class="c-title">关于人类玩家与 AI（如 Beam Search）同榜规则</strong>
+        airstring 遵循「验真通过即上榜、不分人机、身份自明」的开放口径：你会在大厅里看到人类玩家的对局，也会看到官方机器人账号（例如 <code>Beam Search</code>）跑出的深层树搜索对局。所有对局的来源账号、批次与谱系信息都公开透明，你随时可以点开 AI 的深层录像观摩学习，甚至在任意一层分叉接管！
+      </div>
+
+      <h3 id="account-modes">1.2 游客试玩 vs Google 登录对比</h3>
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>功能项</th>
+              <th>游客试玩（未登录）</th>
+              <th>Google 账号登录（推荐）</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>直接进地牢游玩 / 看大厅公开录像 / 暂停查装备</td>
+              <td>✅ 支持</td>
+              <td>✅ 支持</td>
+            </tr>
+            <tr>
+              <td>每回合自动保存（本地 + 云端）与刷新 F5 续打</td>
+              <td>❌ 刷新或关闭页面进度丢失</td>
+              <td>✅ 自动保存，跨电脑/手机无缝续打</td>
+            </tr>
+            <tr>
+              <td>中途登录认领当前试玩局</td>
+              <td>✅ 局内菜单随时点登录即可立刻认领保存</td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <td>局终自动上云、后台验真、进入公开大厅</td>
+              <td>❌ 不上云、不入榜</td>
+              <td>✅ 自动归档验真，生成永久公开回放链接</td>
+            </tr>
+            <tr>
+              <td>从他人录像或自己对局「分叉」并持久保存</td>
+              <td>⚠ 仅当次浏览器有效</td>
+              <td>✅ 自动保存为你的独立时间线并记入分叉家族树</td>
+            </tr>
+            <tr>
+              <td>发表回放回合锚点留言 / 软删除自己的历史局</td>
+              <td>❌ 仅可浏览留言</td>
+              <td>✅ 支持发表、带回合跳转锚点与管理自己的对局</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </article>
+
+    <!-- ==================== 2. 平台使用指南 ==================== -->
+    <article class="section-card" id="how-to-use">
+      <h2>二、项目怎么使用？（界面与全流程）</h2>
+      <p>网站顶部导航栏分为 3 个核心区域：左侧 <strong>大厅</strong>、<strong>对局</strong>，以及最右上角的 <strong>账号区 + ❓ 帮助</strong>。</p>
+      <ul>
+        <li><strong>大厅</strong>：浏览全站所有公开已验真录像卡片（每张卡片带纯黑彩色 ASCII 终局缩略图、职业、玩家、种子、最深层数与回合数）。支持按 <strong>全部 / 🏆 飞升 / 💀 阵亡 / ⚡ 分叉 / 🕳 深层</strong>、职业下拉、排序（最新 / 最深层数 / 最长回合）以及关键词搜索快速筛选。</li>
+        <li><strong>对局（#mygames）</strong>：登录后集中管理你的全部资产——上半部分是你的 <strong>进行中对局</strong>（支持同时开多局，点击卡片即可缓冲续打，也支持直接回放或删除；超过 30 天未操作的会自动折叠进「已搁置对局」不占视线），下半部分是你已结束的对局（显示验真状态，支持房主软删除隐藏）。</li>
+        <li><strong>+ 开新局（#new）</strong>：点击大厅或对局页右上角的 <code>+ 开新局</code> 进入独立的配置页。</li>
+      </ul>
+
+      <h3 id="new-game-guide">2.1 开新局：角色、种子与老玩家选项</h3>
+      <ol class="steps">
+        <li><strong>选职业与身份</strong>：直接点快捷职业卡片（如女武神、野蛮人、武士、法师等），系统会自动联动该职业合法的种族与阵营选项；名字支持英文字母、数字、下划线和连字符。</li>
+        <li><strong>选种子模式</strong>：
+          <ul>
+            <li><strong>指定种子</strong>：输入任意 <code>0 – 2^64-1</code> 整数（如 <code>42</code> 或 <code>55</code>），适合和朋友同题挑战、复现特定开局。</li>
+            <li><strong>随机种子</strong>：由浏览器加密随机数生成，游玩期间隐藏真实种子值防剧透，对局结束后自动揭晓，届时可分享给他人复现。</li>
+          </ul>
+        </li>
+        <li><strong>配置老玩家选项（NETHACKOPTIONS）</strong>：以下白名单选项会随账号/浏览器本地自动记忆，并写入录制 header（100% 通过云端验真）：
+          <div class="tbl-wrap">
+            <table>
+              <thead><tr><th>选项名</th><th>作用说明</th><th>推荐设置</th></tr></thead>
+              <tbody>
+                <tr><td><code>autopickup</code> + <code>pickup_types</code></td><td>走过指定类别物品自动拾取（默认 <code>$?!"=/</code>：金币、卷轴、药水、护身符、戒指、魔杖）</td><td>新手建议开启，老手按习惯自定义</td></tr>
+                <tr><td><code>lit_corridor</code></td><td>照亮已探索过的走廊，视野更清爽</td><td>强烈建议开启</td></tr>
+                <tr><td><code>hilite_pet</code></td><td>高亮显示你的宠物，防止混在怪堆里误砍</td><td>强烈建议开启</td></tr>
+                <tr><td><code>hilite_pile</code></td><td>高亮显示地面多件物品堆叠格，不错过漏捡宝物</td><td>强烈建议开启</td></tr>
+                <tr><td><code>paranoid_confirmation</code></td><td>对 <code>pray / quit / die / attack</code> 强制输入完整 <code>yes</code> 确认，杜绝手滑按 <code>y</code> 误杀和平 NPC 或误退</td><td>强烈建议开启</td></tr>
+                <tr><td><code>number_pad:1</code></td><td>启用数字小键盘 1–9 作为 8 方向移动（同时释放 <code>h j k l y u b n</code> 的原意）；关闭则用经典 vi 键位</td><td>习惯小键盘选开，习惯 vi 键选关</td></tr>
+                <tr><td><code>showexp, time</code></td><td>状态栏固定显示经验值与准确回合数</td><td>默认开启</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </li>
+      </ol>
+
+      <h3 id="save-resume">2.2 自动保存、缓冲续打与防冲突保护</h3>
+      <ul>
+        <li><strong>零手工存档</strong>：登录状态下，你每走完一个回合都会即时写入浏览器 IndexedDB，并在后台定时/切屏/返回时自动同步至云端。不用找保存按钮，也不用担心断电丢档。</li>
+        <li><strong>视频式静音缓冲续打</strong>：因为平台只存按键流不存二进制快照，当你重新打开一局第 4,000 回合的对局时，引擎会在静音高速模式下把历史按键流逐帧快进到你离开的那一刻（屏幕显示缓冲进度条并核对帧哈希）。几千回合通常只需几秒钟。</li>
+        <li><strong>同设备多标签页防双写锁</strong>：同一浏览器开两个标签页进同一局时，旧标签页会自动锁定提示「你已在另一个标签页继续本局」，避免覆盖进度；点「在此页重新接管」即可切回。</li>
+        <li><strong>跨设备分歧自动保护</strong>：如果手机和电脑各自离线推进了同一局并走出不同路线，同步时不会粗暴覆盖任何一方，而是自动把其中一条分叉为独立新局，两边进度全部保留。</li>
+      </ul>
+
+      <h3 id="desktop-mobile">2.3 桌面端与手机竖屏体验</h3>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>💻 桌面端：纯黑 Curses 键盘优先终端</h4>
+          <p>
+            进入对局后自动隐藏网站外壳、铺满 <code>100dvh</code> 纯黑终端；默认隐藏底部触控栏把空间全部留给 80×21 地图（可点右上角 <code>⌨</code> 随时呼出/收起触控栏，点 <code>⛶</code> 进入真全屏）。顶部 <code>← 返回</code> 随时保存返回大厅或对局页。
+          </p>
+        </div>
+        <div class="mini-card">
+          <h4>📱 手机端：竖屏沉浸式拇指操控</h4>
+          <p>
+            顶部固定 2 行消息（点击可展开最近 200 条历史），中间无遮挡彩色地图支持 <strong>@ 放大跟随视角 ⇄ 右下角「🗺 全图」一键缩览</strong>，底部固定状态栏 + 拇指 8 方向盘 + 场景自适应快捷按钮（站门旁出「开门」、站楼梯出「上/下楼」、站物品出「拾取」），局内菜单支持左右手互换！
+          </p>
+        </div>
+      </div>
+    </article>
+
+    <!-- ==================== 3. 站内增强功能 ==================== -->
+    <article class="section-card" id="features">
+      <h2>三、airstring 专属增强功能详解</h2>
+      <p>在不破坏 NetHack 3.6.7 内核规则与 100% 确定性验真前提下，我们在前端为玩家做了大量实用增强：</p>
+
+      <h3 id="feat-danger">3.1 高危保护盾（Danger Guard）与具体中文异常状态</h3>
+      <ul>
+        <li><strong>高危警报保护盾</strong>：当引擎输出致命风险消息（如开始石化 <code>turning to stone</code>、致命食物中毒 <code>food poisoning</code>、史莱姆化 <code>turning into slime</code>、绝症、濒死血线等），地图上方会立刻弹出红色 <strong>🛑 高危警报</strong>，并自动 <strong>锁定移动键 650 毫秒</strong>，防止连按方向键手滑送命！按 <kbd>Space</kbd> 或 <kbd>Esc</kbd>（或点「解除」）即可继续操作，也可在局内菜单 <code>☰</code> 自由开关。</li>
+        <li><strong>具体中文异常状态徽章</strong>：状态栏不再只笼统显示「异常」，而是实时识别并醒目标注具体负面状态：
+          <code>⚠ 失明</code>、<code>⚠ 混乱</code>、<code>⚠ 眩晕</code>、<code>⚠ 幻觉</code>、<code>⚠ 中毒/生病</code>、<code>⚠ 石化!</code>、<code>⚠ 史莱姆!</code>、<code>⚠ 被困/束缚</code>、<code>⚠ 浮空</code>，解除或脱困移动后自动清除。
+        </li>
+        <li><strong>中文输入法（IME）防误吞警告</strong>：开着中文输入法打 NetHack 极易吞键或误触，检测到输入法合成事件时屏幕上方会自动出现黄色提醒条，提醒切回英文键盘。</li>
+      </ul>
+
+      <h3 id="feat-cursor">3.2 远视 <code>;</code> / 寻路 <code>_</code> 青色光标准星 &amp; <code>#</code> 命令自动补全</h3>
+      <ul>
+        <li><strong>青色光标准星</strong>：按 <kbd>;</kbd>（远视看某格是什么）或 <kbd>_</kbd>（自动寻路走去某格）后，地图上会出现高对比度的<strong>青色脉冲准星框</strong>，顶部信息条同步显示当前光标坐标与用法提示，支持键盘方向键和屏幕方向盘联动移动，<kbd>.</kbd> / <kbd>Enter</kbd> 确认，<kbd>Esc</kbd> 取消。</li>
+        <li><strong><code>#</code> 扩展命令 Tab 补全</strong>：按 <kbd>#</kbd> 唤出扩展命令栏后，输入 1–2 个字母即可看到候选命令芯片（如输入 <code>pr</code> 提示 <code>pray</code>），按 <kbd>Tab</kbd> 自动补全或直接点击芯片提交，再也不用背长单词拼写。</li>
+      </ul>
+
+      <h3 id="feat-notes">3.3 随局记事本（📝）与 300 回合祈祷安全计时器</h3>
+      <ul>
+        <li>点击局内右上角 <code>📝</code> 打开随局抽屉笔记：笔记按当前 <code>gameId</code> 自动保存在浏览器本地，适合记录「Dlvl 4 中立祭坛」「Dlvl 6 商店价格」「未鉴定戒指效果」等。</li>
+        <li>点击 <code>+ 记当前层/回合</code> 一键插入 <code>[Dlvl:X T:Y]</code> 时间戳。</li>
+        <li><strong>自动祈祷冷却监测</strong>：一旦你在本局触发过祈祷（<code>#pray</code>），计时器会自动记录上次祈祷回合，实时计算距今经过的回合数，并给出颜色提示（&lt; 300 回合为危险冷却期，≥ 300 回合转为安全），大幅降低被神雷劈死的概率。</li>
+        <li><strong>终端主题 &amp; 字体缩放</strong>：打开局内菜单 <code>☰</code> 可实时切换 3 套配色（<strong>NAO 暗黑</strong> / <strong>Classic 经典</strong> / <strong>Amber 琥珀复古</strong>）及 <code>A- / A+</code>（75%–140%）字号缩放。</li>
+      </ul>
+
+      <h3 id="feat-dumplog">3.4 NAO 风格完整战报（Dumplog）与一键分享</h3>
+      <p>
+        无论是自己打完一局（Game Over 画面），还是在录像放映厅看任何一局公开录像，都可以点击 <strong>「📜 完整战报 (Dumplog)」</strong>：
+      </p>
+      <ul>
+        <li>系统会在后台只读沙盒中汇总终局前那一刻的 <strong>终局地图截图、六维与内在属性（<code>^X</code>）、全套装备与背包（<code>i</code>）、地牢总览（<code>#overview</code>）、已鉴定图鉴（<code>\</code>）与最近 40 条日志</strong>。</li>
+        <li>支持一键 <strong>📋 复制</strong> 到剪贴板或 <strong>⬇ 下载 <code>.dumplog.txt</code></strong>。</li>
+        <li><strong>内置一键直达分享链接</strong>：已上云对局生成的战报，会在<strong>最顶部和最底部</strong>醒目附带 <code>https://airstring.org/#replay/&lt;gameId&gt;</code> 直达链接和引导说明——发到群聊、论坛或 Discord，朋友点一下就能直接看逐帧回放、暂停查装备，或者从你死前那一回合分叉接管帮你翻盘！</li>
+      </ul>
+    </article>
+
+    <!-- ==================== 4. 回放、窥视与分叉 ==================== -->
+    <article class="section-card" id="replay-fork">
+      <h2>四、录像回放、暂停深度查看与任意回合分叉详解</h2>
+
+      <h3 id="replay-theater">4.1 录像放映厅（<code>#replay/&lt;gameId&gt;</code>）</h3>
+      <p>在大厅点击任意一张录像卡片（或在「对局」页点击进行中/已结束对局的「▶ 回放」），即进入录像放映厅：</p>
+      <ul>
+        <li><strong>完整播放控制</strong>：支持播放/暂停（<kbd>Space</kbd>）、单帧步进（<kbd>←</kbd>/<kbd>→</kbd>）、快退/快进 5 帧（<kbd>Shift</kbd>+<kbd>←</kbd>/<kbd>→</kbd>）、多档倍速、直接拖动进度条跳到任意回合。</li>
+        <li><strong>右侧「角色实况」面板</strong>：随播放进度实时更新当前帧的 6 维属性（Str/Dx/Co/In/Wi/Ch）、HP/Pw/AC/Exp/金/层数/阵营/状态，顶部消息栏点击可展开全历史消息流。</li>
+        <li><strong>回合锚点留言</strong>：登录用户可在公开已验真录像下方发表评论，勾选「附带当前回合」后会生成类似 <code>@T1842</code> 的蓝色锚点标签，任何人点击该标签，播放器会自动精准跳转到第 1842 回合！</li>
+      </ul>
+
+      <h3 id="replay-inspector">4.2 暂停深度查看器（🔍 查看角色详情 · 零分叉）</h3>
+      <p>
+        光看地图还不够，想知道某大佬第 3,500 回合身上到底穿了什么甲、有什么抗性、无底袋里藏了什么神器？不需要分叉！
+      </p>
+      <ol class="steps">
+        <li>把录像暂停在你关心的那一帧，点击 <strong>「🔍 查看角色详情」</strong>。</li>
+        <li>系统会启动一个<strong>一次性只读 WASM 沙盒</strong>重放到当前帧，自动向引擎查询 4 大面板：
+          <ul>
+            <li><strong>🎒 背包与装备（<code>i</code>）</strong>：列出身上所有装备、强化值、BUC 状态与重量；如果背包里有箱子或袋子（如 <code>bag of holding</code> / <code>sack</code> / <code>oilskin sack</code>），还会出现 <strong>「🎒 查看袋内」</strong> 按钮，点一下实时打开袋子把里面的每一件物品都列出来！</li>
+            <li><strong>📊 属性与内在能力（<code>Ctrl+X</code>）</strong>：查看全套抗性（火/冰/毒/电/睡/分解）、速度、心灵感应、护甲细节与当前行为记录。</li>
+            <li><strong>📖 已鉴定图鉴（<code>\</code>）</strong>：看清当前已识别的所有药水、卷轴、戒指、魔杖与魔法书。</li>
+            <li><strong>🗺 地牢总览（<code>#overview</code>）</strong>：一览所有探索过的分支、祭坛、商店、喷泉与楼梯分布。</li>
+          </ul>
+        </li>
+        <li>整个查看过程完全只读，<strong>不会产生任何新分叉记录</strong>，关掉弹窗就能继续看录像。</li>
+      </ol>
+
+      <h3 id="fork-mechanism">4.3 任意回合「⚡ 分叉（Fork）」与分叉家族树</h3>
+      <p>「分叉」是 airstring 最具特色的玩法——你可以把任何人的对局（或自己的对局）在任意时间点切出一条属于你的平行宇宙：</p>
+      <ul>
+        <li><strong>三种触发入口</strong>：
+          <ol>
+            <li><strong>录像放映厅</strong>：拖到任意回合暂停，点 <strong>「⚡ 从此分叉」</strong>，直接从那一帧接管操作；</li>
+            <li><strong>局内菜单 <code>☰</code></strong>：游玩途中随时点「从当前回合分叉新局」，留一个平行备份尝试高风险操作；</li>
+            <li><strong>阵亡结算页</strong>：死掉后点 <strong>「从死前（第 N-1 回合）分叉再试」</strong>，立刻回到死前一回合复盘求生！</li>
+          </ol>
+        </li>
+        <li><strong>公平性与可验真保证</strong>：分叉局不是「作弊读档」——它把原局前 N 回合的原始按键流作为前缀，拼接你接管后的按键流，形成一条<strong>从开局第 1 步起完整自包含的新按键流</strong>。局终照常走完整验真，且卡片与详情页都会清晰标注 <code>⚡ 分叉</code>、父局来源与分叉回合，并在原局右侧的 <strong>「分叉家族树」</strong> 中互相串联。</li>
+      </ul>
+    </article>
+
+    <!-- ==================== 5. 快捷键速查表 ==================== -->
+    <article class="section-card" id="shortcuts">
+      <h2>五、快捷键全景速查表</h2>
+      <div class="callout warn">
+        <strong class="c-title">切记区分大小写 &amp; 保持英文输入法！</strong>
+        NetHack 是高度区分大小写的游戏：比如小写 <kbd>d</kbd> 是丢弃 1 件物品，大写 <kbd>D</kbd> 是批量丢弃；小写 <kbd>w</kbd> 是拿武器，大写 <kbd>W</kbd> 是穿护甲。游玩时请务必切换至<strong>英文半角输入法</strong>。
+      </div>
+
+      <h3 id="keys-move">5.1 移动、8 方向奔跑与自动寻路</h3>
+      <div class="compass-pair">
+        <div class="compass-box">
+          <div class="compass-title">经典 vi 键位（默认，关 number_pad）</div>
+          <div class="compass-grid">
+            <div class="compass-cell"><span class="k">y</span><span class="d">↖ 左上</span></div>
+            <div class="compass-cell"><span class="k">k</span><span class="d">↑ 上</span></div>
+            <div class="compass-cell"><span class="k">u</span><span class="d">↗ 右上</span></div>
+            <div class="compass-cell"><span class="k">h</span><span class="d">← 左</span></div>
+            <div class="compass-cell center"><span class="k">.</span><span class="d">原地休</span></div>
+            <div class="compass-cell"><span class="k">l</span><span class="d">→ 右</span></div>
+            <div class="compass-cell"><span class="k">b</span><span class="d">↙ 左下</span></div>
+            <div class="compass-cell"><span class="k">j</span><span class="d">↓ 下</span></div>
+            <div class="compass-cell"><span class="k">n</span><span class="d">↘ 右下</span></div>
+          </div>
+        </div>
+        <div class="compass-box">
+          <div class="compass-title">小键盘模式（开 number_pad:1 或实体 Numpad）</div>
+          <div class="compass-grid">
+            <div class="compass-cell"><span class="k">7</span><span class="d">↖ 左上</span></div>
+            <div class="compass-cell"><span class="k">8</span><span class="d">↑ 上</span></div>
+            <div class="compass-cell"><span class="k">9</span><span class="d">↗ 右上</span></div>
+            <div class="compass-cell"><span class="k">4</span><span class="d">← 左</span></div>
+            <div class="compass-cell center"><span class="k">5 / .</span><span class="d">原地休</span></div>
+            <div class="compass-cell"><span class="k">6</span><span class="d">→ 右</span></div>
+            <div class="compass-cell"><span class="k">1</span><span class="d">↙ 左下</span></div>
+            <div class="compass-cell"><span class="k">2</span><span class="d">↓ 下</span></div>
+            <div class="compass-cell"><span class="k">3</span><span class="d">↘ 右下</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>按键</th><th>功能</th><th>使用技巧</th></tr></thead>
+          <tbody>
+            <tr><td><kbd>方向键</kbd> / <kbd>Home</kbd> <kbd>End</kbd> <kbd>PgUp</kbd> <kbd>PgDn</kbd></td><td>上下左右与四斜角移动</td><td>无论是否开启小键盘选项都可用</td></tr>
+            <tr><td><kbd>Shift</kbd> + 方向（如 <kbd>H J K L</kbd>）</td><td>长距离奔跑</td><td>撞墙、遇怪、遇门或走廊拐弯自动停</td></tr>
+            <tr><td><kbd>g</kbd> + 方向</td><td>谨慎奔跑（遇路口/物品/怪即停）</td><td>最安全的走廊探图方式</td></tr>
+            <tr><td><kbd>G</kbd> + 方向</td><td>一路沿走廊拐弯走到尽头/岔路</td><td>快速穿过长走廊</td></tr>
+            <tr><td><kbd>_</kbd></td><td>自动寻路（Travel）</td><td>用方向键移青色准星到目标格，按 <kbd>.</kbd> 或 <kbd>Enter</kbd> 自动走过去</td></tr>
+            <tr><td><kbd>.</kbd> / <kbd>20.</kbd></td><td>原地休息 1 回合 / 连续休 20 回合</td><td>前面打数字可重复任意命令（遇怪会自动打断）</td></tr>
+            <tr><td><kbd>s</kbd> / <kbd>20s</kbd></td><td>搜索周围隐藏门与陷阱</td><td>死胡同墙边连搜 <code>20s</code> 是找暗门必备操作</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="keys-action">5.2 环境交互、背包装备、消耗品与魔法</h3>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>分类</th><th>按键</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr>
+              <td rowspan="6"><strong>环境与侦察</strong></td>
+              <td><kbd>o</kbd> / <kbd>c</kbd></td>
+              <td>开门（open）/ 关门（close）</td>
+            </tr>
+            <tr><td><kbd>Ctrl+D</kbd> 或 <kbd>Shift+Alt+D</kbd></td><td>踢（kick）：踹开锁住的门、踹开上锁箱子、踹商店外的水槽/宝座等（注意脚伤）</td></tr>
+            <tr><td><kbd>&lt;</kbd> / <kbd>&gt;</kbd></td><td>上楼梯 / 下楼梯（站在楼梯格上按）</td></tr>
+            <tr><td><kbd>,</kbd> / <kbd>:</kbd></td><td>拾取脚下物品（pick up）/ 查看脚下有什么（look here）</td></tr>
+            <tr><td><kbd>;</kbd></td><td>远视（farlook）：移动青色准星查看地图任意格子的地形、怪物或物品</td></tr>
+            <tr><td><kbd>/</kbd> / <kbd>^</kbd></td><td>按字符查图鉴说明（例如按 <kbd>/</kbd> 再按 <kbd>c</kbd> 查鸡蛇）/ 查看相邻已知陷阱</td></tr>
+
+            <tr>
+              <td rowspan="8"><strong>背包与装备</strong></td>
+              <td><kbd>i</kbd> / <kbd>$</kbd></td>
+              <td>查看全部背包（inventory）/ 查看金币数</td>
+            </tr>
+            <tr><td><kbd>)</kbd> <kbd>[</kbd> <kbd>=</kbd> <kbd>"</kbd> <kbd>(</kbd></td><td>只看身上某类物品：武器 / 护甲 / 戒指 / 护身符 / 工具</td></tr>
+            <tr><td><kbd>w</kbd> / <kbd>x</kbd></td><td>装备主手武器（wield）/ 快速切换主副手武器（swap）</td></tr>
+            <tr><td><kbd>W</kbd> / <kbd>T</kbd></td><td>穿护甲（Wear）/ 脱护甲（Take off）</td></tr>
+            <tr><td><kbd>P</kbd> / <kbd>R</kbd></td><td>戴戒指或护身符（Put on）/ 摘下（Remove）</td></tr>
+            <tr><td><kbd>d</kbd> / <kbd>D</kbd></td><td>丢弃单件物品（drop）/ 按类别批量丢弃（Drop multiple）</td></tr>
+            <tr><td><kbd>a</kbd></td><td>使用工具（apply）：开灯、吹哨唤宠物、用钥匙/开锁器开门、照镜子、擦油等</td></tr>
+            <tr><td><kbd>t</kbd> / <kbd>Q</kbd> / <kbd>f</kbd></td><td>投掷（throw，如飞匕首）/ 准备弹药（Quiver）/ 发射已准备弹药（fire）</td></tr>
+
+            <tr>
+              <td rowspan="5"><strong>消耗与战斗</strong></td>
+              <td><kbd>e</kbd></td><td>吃食物或新鲜尸体（eat）</td>
+            </tr>
+            <tr><td><kbd>q</kbd> / <kbd>r</kbd></td><td>喝药水（quaff）/ 读卷轴或魔法书（read）</td></tr>
+            <tr><td><kbd>z</kbd></td><td>挥魔杖（zap，部分魔杖需选方向，朝自己按 <kbd>.</kbd>）</td></tr>
+            <tr><td><kbd>Z</kbd> / <kbd>+</kbd></td><td>施放已学法术（cast）/ 查看法术列表与成功率</td></tr>
+            <tr><td><kbd>F</kbd> + 方向 / <kbd>E</kbd></td><td>强制攻击该格（打隐形怪或和平生物）/ 地面刻字（Engrave，写 <code>Elbereth</code>）</td></tr>
+
+            <tr>
+              <td rowspan="3"><strong>信息与系统</strong></td>
+              <td><kbd>Ctrl+X</kbd> / <kbd>\</kbd></td>
+              <td>查看详细属性与内在能力 / 查看本局已鉴定的物品图鉴</td>
+            </tr>
+            <tr><td><kbd>Ctrl+P</kbd>（或 <kbd>Shift+Alt+P</kbd>）</td><td>回看最近游戏消息（也可直接点顶部消息栏展开最近 200 条）</td></tr>
+            <tr><td><kbd>p</kbd></td><td>在商店结账（pay）</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="keys-ext">5.3 扩展命令（<code>#</code>）、原生 <code>Alt</code> Meta 与浏览器防劫持替代键</h3>
+      <p>按 <kbd>#</kbd> 会唤出底部扩展命令输入框（支持 <kbd>Tab</kbd> 自动补全），高频命令也可直接用原生 <kbd>Alt+字母</kbd> 一键触发：</p>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>扩展命令</th><th>Meta 快捷键</th><th>功能说明</th></tr></thead>
+          <tbody>
+            <tr><td><code>#pray</code></td><td><kbd>Alt+p</kbd></td><td>向神祈祷（危急救命：低血/濒饿/中毒/石化；注意 300 回合冷却！）</td></tr>
+            <tr><td><code>#offer</code></td><td><kbd>Alt+o</kbd></td><td>在祭坛献祭新鲜尸体（换取神恩、甚至获赐神器武器！）</td></tr>
+            <tr><td><code>#loot</code></td><td><kbd>Alt+l</kbd></td><td>翻找/存取脚下的箱子或背包里的袋子</td></tr>
+            <tr><td><code>#dip</code></td><td>—</td><td>将物品蘸入药水或喷泉（如蘸水洗卷轴/药水、守序 5 级长剑蘸喷泉出 Excalibur）</td></tr>
+            <tr><td><code>#enhance</code></td><td>—</td><td>升级武器与法术熟练度（看到 <code>You feel more confident</code> 提示时使用）</td></tr>
+            <tr><td><code>#overview</code></td><td>—</td><td>查看已探索地牢总览（标注每一层的祭坛、商店、喷泉、分支）</td></tr>
+            <tr><td><code>#chat</code></td><td><kbd>Alt+c</kbd></td><td>与相邻 NPC/神父/店主/守卫对话</td></tr>
+            <tr><td><code>#untrap</code></td><td><kbd>Alt+u</kbd></td><td>拆除相邻陷阱或检查/拆解箱子陷阱</td></tr>
+            <tr><td><code>#name</code></td><td>—</td><td>给特定物品或整类未鉴定物品起备忘名字（如把 100 金卷轴命名为 <code>id?</code>）</td></tr>
+            <tr><td><code>#tip</code> / <code>#wipe</code></td><td>—</td><td>倒空容器 / 擦掉脸上的毒液或馅饼（解除短暂失明）</td></tr>
+            <tr><td><code>#conduct</code> / <code>#quit</code></td><td>—</td><td>查看当前挑战限制记录 / 主动放弃结束本局（放弃也会生成可验真录像）</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout tip">
+        <strong class="c-title">浏览器快捷键防劫持替代键（airstring 专属）</strong>
+        Chrome / Edge / Safari 会拦截 <kbd>Ctrl+T</kbd>（新标签页）、<kbd>Ctrl+P</kbd>（打印）、<kbd>Ctrl+R</kbd>（刷新）、<kbd>Ctrl+D</kbd>（收藏）。在 airstring 里，统一用 <strong><kbd>Shift+Alt</kbd></strong> 替代即可 100% 穿透：<br>
+        <kbd>Shift+Alt+T</kbd> = 传送（<code>^T</code>） ·
+        <kbd>Shift+Alt+P</kbd> = 上条消息（<code>^P</code>） ·
+        <kbd>Shift+Alt+R</kbd> = 重绘画面（<code>^R</code>） ·
+        <kbd>Shift+Alt+D</kbd> = 踢（<code>^D</code>）。
+      </div>
+
+      <h3 id="keys-replay">5.4 录像放映厅快捷键</h3>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>按键</th><th>功能</th></tr></thead>
+          <tbody>
+            <tr><td><kbd>Space</kbd></td><td>播放 / 暂停</td></tr>
+            <tr><td><kbd>←</kbd> / <kbd>→</kbd></td><td>后退 1 帧 / 前进 1 帧</td></tr>
+            <tr><td><kbd>Shift+←</kbd> / <kbd>Shift+→</kbd></td><td>快退 5 帧 / 快进 5 帧</td></tr>
+            <tr><td><kbd>Esc</kbd></td><td>关闭当前弹窗（详情/Dumplog），或退出放映厅返回上一页</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </article>
+
+    <!-- ==================== 6. NetHack 新手完全教材 ==================== -->
+    <article class="section-card" id="beginner">
+      <h2>六、NetHack 3.6.7 新手完全入门教材</h2>
+      <p>
+        NetHack 是诞生于 1987 年、至今仍被奉为传统 Roguelike 巅峰的传奇地牢游戏——它的迷人之处不在于华丽画面，而在于<strong>惊人深度的交互逻辑</strong>（开发者替你想到了几乎所有脑洞，玩家戏称 <em>The DevTeam Thinks of Everything</em>）。下面按「看懂界面 → 选好职业 → 前 500 回合实操 → 核心机制 → 避坑保命 → 中后期目标」带你从零上手！
+      </p>
+
+      <h3 id="nh-basics">6.1 游戏目标与三条核心铁律</h3>
+      <ul>
+        <li><strong>终极目标</strong>：从地牢第 1 层一路向下探索约 50 层，穿过侏儒矿坑、推箱子、城堡与冥界，取回 <strong>Yendor 护身符（Amulet of Yendor）</strong>，再一路杀回第 1 层爬出地牢，穿越元素位面与星界，将护身符献祭给你所属阵营神明的高阶祭坛，完成 <strong>飞升成神（Ascension）</strong>！</li>
+        <li><strong>铁律 1 — 严格回合制，遇险先把手离开键盘！</strong> 只要你不按键，整个地牢的时间就是完全静止的。血量变红、中毒、被围攻时，<strong>千万别凭本能连按方向键</strong>！停下来看顶部消息、按 <kbd>i</kbd> 翻背包（看背包和查看信息<strong>不消耗回合</strong>），想想有没有回血药、传送卷、挖掘魔杖、<code>Elbereth</code> 或 <code>#pray</code>！</li>
+        <li><strong>铁律 2 — 永久死亡（Permadeath）</strong>：死了就是死了，但每一次死亡都在教你一条宝贵规则；而且在 airstring 里，你死后可以一键<strong>分叉回到死前一回合</strong>复盘自己原本怎么活下来！</li>
+        <li><strong>铁律 3 — 活下来比刷怪重要</strong>：前期打不过就跑、上楼回血、让宠物顶前排、用走廊卡 1v1 地形，永远不要在残血时硬拼。</li>
+      </ul>
+
+      <h3 id="nh-glyphs">6.2 看懂字符世界（ASCII 符号速读图鉴）</h3>
+      <p>刚开始看满屏字符会眼花，其实你只需要先认识下面这 20 个符号，10 分钟就能看懂整张地图（遇到不认识的随时按 <kbd>;</kbd> 移光标去看，或按 <kbd>/</kbd> 输入符号查解释）：</p>
+      <pre class="ascii-box">  ----------        @ = 你自己（冒险者）     d = 你的初始小狗（宠物）
+  |...&lt;....|        &lt; = 上楼梯（回上一层）   &gt; = 下楼梯（去更深一层）
+  |..@..d..+####    + = 关着的门（o 开门）   # = 探索过的走廊
+  |.....%..|   #    % = 食物 / 怪物尸体      $ = 金币
+  ----|-----   #    _ = 神明祭坛             { = 喷泉
+               #    ^ = 陷阱                 ! ? / = 药水 / 卷轴 / 魔杖</pre>
+
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>类别</th><th>常见符号一览</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>地形</strong></td>
+              <td>
+                <span class="glyph g-white">@</span> 玩家 &nbsp;
+                <span class="glyph g-gray">.</span> 房间地板 &nbsp;
+                <span class="glyph g-gray">#</span> 走廊 &nbsp;
+                <span class="glyph g-gray">-</span><span class="glyph g-gray">|</span> 墙壁 &nbsp;
+                <span class="glyph g-brown">+</span> 关门 &nbsp;
+                <span class="glyph g-brown">'</span> 开门 &nbsp;
+                <span class="glyph g-white">&lt;</span> 上楼 &nbsp;
+                <span class="glyph g-white">&gt;</span> 下楼 &nbsp;
+                <span class="glyph g-blue">{</span> 喷泉 &nbsp;
+                <span class="glyph g-white">_</span> 祭坛 &nbsp;
+                <span class="glyph g-mag">^</span> 陷阱 &nbsp;
+                <span class="glyph g-blue">}</span> 水/岩浆
+              </td>
+            </tr>
+            <tr>
+              <td><strong>物品</strong></td>
+              <td>
+                <span class="glyph g-gold">$</span> 金币 &nbsp;
+                <span class="glyph g-brown">%</span> 食物/尸体 &nbsp;
+                <span class="glyph g-cyan">!</span> 药水 &nbsp;
+                <span class="glyph g-white">?</span> 卷轴 &nbsp;
+                <span class="glyph g-cyan">/</span> 魔杖 &nbsp;
+                <span class="glyph g-gold">=</span> 戒指 &nbsp;
+                <span class="glyph g-gold">"</span> 护身符 &nbsp;
+                <span class="glyph g-cyan">)</span> 武器 &nbsp;
+                <span class="glyph g-blue">[</span> 护甲 &nbsp;
+                <span class="glyph g-brown">(</span> 工具 &nbsp;
+                <span class="glyph g-mag">+</span> 魔法书 &nbsp;
+                <span class="glyph g-gray">*</span> 宝石
+              </td>
+            </tr>
+            <tr>
+              <td><strong>典型怪物</strong></td>
+              <td>
+                小写/大写字母代表不同物种：
+                <span class="glyph g-brown">d</span> 狗/豺狼 ·
+                <span class="glyph g-white">f</span> 猫 ·
+                <span class="glyph g-green">k</span> 狗头人 ·
+                <span class="glyph g-gray">g</span> 地精 ·
+                <span class="glyph g-green">F</span> 地衣（安全免费食物！） ·
+                <span class="glyph g-blue">e</span> 浮动之眼（<strong>别近战打！</strong>） ·
+                <span class="glyph g-gold">c</span> 鸡蛇（<strong>碰尸体即石化死！</strong>） ·
+                <span class="glyph g-mag">n</span> 仙女（偷东西） ·
+                <span class="glyph g-red">D</span> 巨龙
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="nh-class">6.3 第一局怎么选角色？（新手最强开荒推荐）</h3>
+      <div class="grid-3">
+        <div class="mini-card">
+          <h4>🥇 首推：矮人女武神（Dwarf Valkyrie · Lawful）</h4>
+          <p>
+            公认的「新手之友」：开局高血量高力量、自带长剑＋匕首＋小盾、天生拥有寒冰与潜行抗性；在侏儒矿坑里矮人全是友军不打你；5 级后把长剑蘸喷泉（<code>#dip</code>）还能直接拿强力神器 <strong>Excalibur</strong>！
+          </p>
+        </div>
+        <div class="mini-card">
+          <h4>🥈 次推：野蛮人（Barbarian）</h4>
+          <p>
+            天生自带<strong>毒抗</strong>（前期最常见死因之一直接免疫！）、开局双手大剑火力凶猛、血厚能扛，操作直爽。
+          </p>
+        </div>
+        <div class="mini-card">
+          <h4>🥉 备选：武士（Samurai）</h4>
+          <p>
+            天生<strong>加速（Fast）</strong>、自带锋利太刀与弓箭（天生有远程手段，轻松风筝浮动之眼），前期手很顺。
+          </p>
+        </div>
+      </div>
+      <p style="color: var(--dim); font-size: 13.5px;">💡 提示：法师（Wizard）、游客（Tourist）、考古学家（Archeologist）前期身板脆、机制依赖深，建议先用女武神打通到 10 层以上再体验。</p>
+
+      <h3 id="nh-first500">6.4 开局前 500 回合手把手生存流程</h3>
+      <ol class="steps">
+        <li><strong>进地牢第一件事：按 <kbd>i</kbd> 盘点家当</strong><br>
+          看清手里拿着什么武器（<code>weapon in hand</code>）、穿了什么护甲（<code>being worn</code>）、有几份食物、有没有远程飞镖/匕首或回血药水。</li>
+        <li><strong>抱紧初始宠物的大腿</strong><br>
+          你的初始猫/狗不仅是强力打手，还是<strong>免费的诅咒探测器</strong>：当你在地上发现护甲/武器/戒指时，先别急着穿，站在旁边等宠物走过去——如果宠物踩上去后没有异常，基本安全；如果消息提示 <code>moves only reluctantly</code>（勉强走过去），说明那件物品<strong>被诅咒了</strong>，千万别穿！</li>
+        <li><strong>看懂底栏状态：HP、AC、Exp、负重</strong><br>
+          <ul>
+            <li><strong>HP</strong>：低于一半就退回安全角落按 <kbd>20.</kbd> 回血（遇怪会自动停，非常安全）。</li>
+            <li><strong>AC（护甲等级）</strong>：<strong>数字越低防御越高！</strong> <code>AC:10</code> ≈ 没穿甲，<code>AC:4</code> 起步，<code>AC:0</code> 不错，<code>AC:-10</code> 以下才算成型。</li>
+            <li><strong>Burden（负重）</strong>：一旦状态栏出现 <code>负重/重压</code>，立刻按 <kbd>d</kbd> 扔掉多余重物（尤其是多余铠甲与低价值石头），绝不要负重打架！</li>
+          </ul>
+        </li>
+        <li><strong>遇到没门的死胡同？搜暗门！</strong><br>
+          地牢里经常藏着暗门。如果这一层还没找到下楼梯 <code>&gt;</code>，沿着面向大片空白区域的房间墙壁走，每隔 2–3 格按 <kbd>15s</kbd> 或 <kbd>20s</kbd>，暗门就会现身！</li>
+        <li><strong>科学吃饭，绝不饿死也不乱吃毒尸</strong><br>
+          <ul>
+            <li>出现 <code>饥饿 (Hungry)</code> 就找东西吃，别拖到 <code>虚弱 (Weak)</code> 或 <code>晕厥 (Fainting)</code>。</li>
+            <li>优先吃<strong>刚打死的、可食用的新鲜尸体</strong>（按 <kbd>e</kbd>），把背包里的干粮留给紧急情况。最安全的免费口粮是 <strong>地衣（<code>F</code> lichen）</strong> 和 <strong>蜥蜴（<code>:</code> lizard）</strong>——这两种尸体永不腐烂！</li>
+            <li><strong>绝对别吃</strong>：死亡超过 ~30 回合的旧尸体（会食物中毒）、狗/猫/与你同种族的尸体（掉幸运/惹怒神明）、蝙蝠/蜂/蛇/蝎子等带毒尸体（在拿到毒抗之前）、以及<strong>鸡蛇（<code>c</code>）尸体（一口石化秒死！）</strong>。</li>
+          </ul>
+        </li>
+        <li><strong>遇强怪用走廊 1v1，打不过就上楼</strong><br>
+          在空旷房间被 3 只怪围殴必死，立刻退进 1 格宽的走廊 <code>#</code>，每次只面对 1 只怪！血危直接上楼梯 <code>&lt;</code> 逃回上一层喘气回血。</li>
+        <li><strong>正确逛商店（别手滑变通缉犯）</strong><br>
+          进入房间看到有老板（<code>@</code>）和满地标价商品就是商店。在店里捡东西先放背包没关系，<strong>走出店门前务必按 <kbd>p</kbd>（<code>#pay</code>）付钱</strong>，买不起就按 <kbd>d</kbd> 放回店里地板。如果开启了自动拾取，建议进店后多留意不要带着未付钱物品出门。</li>
+      </ol>
+
+      <h3 id="nh-buc">6.5 BUC（祝福 / 普通 / 诅咒）与三大免费鉴定法</h3>
+      <p>NetHack 中几乎所有物品都带有隐藏的 <strong>BUC 属性</strong>：</p>
+      <ul>
+        <li><strong>Blessed（祝福）</strong>：效果大幅增强（如祝福回血药加最大血量上限，祝福卷轴威力翻倍，祝福武器对不死/恶魔加伤）。</li>
+        <li><strong>Uncursed（普通）</strong>：标准正常效果。</li>
+        <li><strong>Cursed（诅咒）</strong>：<strong>一旦穿上/握持/戴上就脱不下来！</strong> 诅咒武器可能减命中、诅咒卷轴和药水往往产生负面灾难效果。</li>
+      </ul>
+      <div class="callout tip">
+        <strong class="c-title">新手必会的三大免费鉴定技巧</strong>
+        1. <strong>宠物踩踏法（验诅咒）</strong>：把未知装备丢在宠物必经之路，宠物敢自然踩上去 = 大概率无诅咒；若「勉强走过去」= 诅咒！<br>
+        2. <strong>祭坛丢物法（100% 精准验 BUC）</strong>：找到地牢里的祭坛 <code>_</code>，站在上面把未知物品 <code>d</code> 丢下去：闪 <strong>琥珀/白光 = 祝福</strong>，闪 <strong>黑光 = 诅咒</strong>，闪 <strong>清光/无黑光 = 普通</strong>！<br>
+        3. <strong>商店问价法（推算卷轴/药水真名）</strong>：把未鉴定的卷轴或药水丢在商店地板，看店主愿出多少钱收购（或看同类商品售价）——例如基础价 20 金的卷轴几乎一定是极其珍贵的 <strong>鉴定卷轴（Scroll of Identify）</strong>！然后用 <code>#name</code> 给它做个记号。
+      </div>
+
+      <h3 id="nh-elbereth">6.6 救命神咒 <code>Elbereth</code> 与紧急脱险心法</h3>
+      <p>
+        如果你只记住 NetHack 的一个秘籍，请记住这个词：<strong><code>Elbereth</code></strong>（注意首字母大写 <code>E</code>，后面全小写，一字不能错！）。
+      </p>
+      <ul>
+        <li><strong>怎么用</strong>：残血被一群怪追到绝境时，按 <kbd>E</kbd>（<code>#engrave</code>），选 <code>-</code>（用手指在灰尘里写）或用魔杖/武器刻，输入 <code>Elbereth</code> 回车。</li>
+        <li><strong>效果</strong>：大多数有视觉、非人形非极高阶的怪物看到脚下的 <code>Elbereth</code> 会心生畏惧不敢近身攻击你，你可以趁机原地回血、喝药或 <code>#pray</code>！</li>
+        <li><strong>注意事项</strong>：站在 <code>Elbereth</code> 上时<strong>不要主动近战攻击怪物</strong>（一打就破功）；手指写在灰尘里的字容易被蹭模糊，危急时多写几次或用火/电/挖掘魔杖永久烧刻在地板上！</li>
+      </ul>
+
+      <h3 id="nh-yasd">6.7 新手十大经典死法（YASD）避坑清单</h3>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>#</th><th>经典死法</th><th>正确避坑姿势</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td><strong>徒手捡或吃鸡蛇（<code>c</code> cockatrice）尸体</strong></td><td>直接瞬间石化死亡！<strong>必须先戴上手套（gloves）</strong>才能拿它的尸体，永远别吃它。</td></tr>
+            <tr><td>2</td><td><strong>近战硬砍浮动之眼（<code>e</code> floating eye）</strong></td><td>一砍就被定身几十回合，旁边随便一只小怪就能把你活活咬死。<strong>用飞刀/弓箭/魔杖远程打</strong>，或直接绕走！</td></tr>
+            <tr><td>3</td><td><strong>乱穿未验过诅咒的装备/戒指</strong></td><td>戴上诅咒的「饥饿戒指」或负防具脱不下来非常致命。先让宠物踩或拿去祭坛验过再穿！</td></tr>
+            <tr><td>4</td><td><strong>手快连按方向键不看消息</strong></td><td>撞陷阱、撞怪、中石化都没停手。开着 airstring 的高危保护盾，遇到任何红色/黄色提示立刻停手！</td></tr>
+            <tr><td>5</td><td><strong>吃腐烂尸体或毒怪尸体</strong></td><td>刚打死的常见小怪才吃；没毒抗前别吃毒虫/毒蛇/蜂；任何超过 30 回合的旧尸体都别吃（地衣/蜥蜴除外）。</td></tr>
+            <tr><td>6</td><td><strong>频繁乱祈祷（<code>#pray</code>）</strong></td><td>非真危急情况、或距上次祈祷不到 <strong>300 回合</strong> 时祈祷会惹怒神明劈雷！用右上角 <code>📝</code> 祈祷计时器盯着冷却。</td></tr>
+            <tr><td>7</td><td><strong>乱喝未知药水 / 乱读未知卷轴</strong></td><td>可能是酸液、麻痹、失明、毁甲或铁球惩罚！尽量先去商店问价、用鉴定卷轴或备好安全房间再试。</td></tr>
+            <tr><td>8</td><td><strong>带着重度负重进战斗或下楼</strong></td><td>负重会导致大幅减速、饥饿加倍，严重时下楼梯甚至会直接摔死！随时丢弃无用重甲和杂物。</td></tr>
+            <tr><td>9</td><td><strong>误砍店主或白嫖出店</strong></td><td>商店老板前期战斗力碾压新手，绝不要在没付钱时走出店门，也别在店里乱挥攻击魔杖。</td></tr>
+            <tr><td>10</td><td><strong>忘了自己包里有救命道具</strong></td><td>很多新手死时包里躺着 3 瓶大回血药、1 张传送卷轴和 1 根死亡魔杖……残血先按 <kbd>i</kbd> 冷静翻包！</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="nh-roadmap">6.8 地牢 1–20 层新手成长里程碑</h3>
+      <ol class="steps">
+        <li><strong>Dlvl 1–4：活下来 &amp; 找到侏儒矿坑入口</strong><br>
+          在 Dlvl 2–4 会出现一条<strong>额外的下楼梯</strong>，通往分支「侏儒矿坑（Gnomish Mines）」。如果选了矮人女武神，这里非常安全友好！</li>
+        <li><strong>矿坑镇（Minetown）：补给、照明与神庙祭坛</strong><br>
+          下矿坑 3–4 层到达矿坑镇，这里必有<strong>神庙祭坛（可免费鉴全包 BUC + 献祭刷神恩）</strong>和大量商店（买灯油、神灯、工具、鉴定卷轴），但注意先别贸然冲进矿坑最底层（Mines' End）。</li>
+        <li><strong>Dlvl 5+（角色满 5 级）：锻造神器 Excalibur（守序专属）</strong><br>
+          如果你是守序（Lawful）角色（如矮人女武神）且人物等级 ≥ 5，拿一把普通长剑（<code>long sword</code>）站在喷泉 <code>{</code> 旁使用 <code>#dip</code> 把长剑蘸进喷泉，有概率直接获得神器 <strong>Excalibur</strong>（高伤、自动搜暗门、防吸级，可直接用到通关！）。</li>
+        <li><strong>主线 Dlvl 6–10：推箱子关卡（Sokoban）拿顶级神器</strong><br>
+          在神谕层（Oracle，周围有 4 座喷泉和雕像）下面一层会有通往 <strong>Sokoban（推箱子）</strong> 的上楼梯。解开 4 层推箱子谜题后，顶层宝库必送两大游戏最强辅助神器之一：<strong>无底袋（Bag of Holding，大幅减重装一切）</strong> 或 <strong>反射护身符（Amulet of Reflection，反弹射线/龙息）</strong>！</li>
+        <li><strong>Dlvl 14+：职业任务（Quest）→ 城堡（Castle）→ 冥界 → 飞升</strong><br>
+          人物满 14 级后进入职业专属任务拿职业神器；约 Dlvl 25–29 攻克城堡获得必掉的 <strong>许愿魔杖（Wand of Wishing）</strong>，配齐魔抗、反射、全抗性与低 AC 后深入冥界夺取 Yendor 护身符，踏上飞升之路！</li>
+      </ol>
+
+      <h3 id="nh-grow">6.9 如何用 airstring 比传统玩家快 3 倍成长？</h3>
+      <ul>
+        <li><strong>「看大佬录像 + 暂停查背包」</strong>：去大厅按「最深层数」排序，点开 Dlvl 18–20 的录像，看到对方轻松过关时按 <kbd>Space</kbd> 暂停，点 <strong>「🔍 查看角色详情」</strong> 看他此刻的 AC、武器、袋子里的道具和 <code>#overview</code> 路线规划。</li>
+        <li><strong>「死前分叉复盘」</strong>：自己不小心死在某层？别直接弃局，点 <strong>「从死前分叉再试」</strong>，试着换用 <code>Elbereth</code>、魔杖或上楼逃生，一次就能把保命操作刻进肌肉记忆。</li>
+        <li><strong>「同种子二周目」</strong>：记住一个打得很爽的种子，二周目用相同种子再开一局，比较自己前期探索效率和避险决策的进步。</li>
+      </ul>
+
+      <div class="callout info">
+        <strong class="c-title">准备好下地牢了吗？</strong>
+        回到 <a href="./index.html#new"><strong>开新局页面</strong></a>，选一个 <strong>矮人女武神（Dwarf Valkyrie）</strong>，保持英文键盘，迈出你的第一步吧！遇到任何问题随时再点页面最右上角的 <strong>❓ 帮助</strong> 打开本页查阅。
+      </div>
+    </article>
+  </main>
+</div>
+
+<footer class="help-footer">
+  airstring · NetHack 3.6.7 帮助中心 · <a href="./index.html">返回大厅</a> · <a href="./index.html#new">开新局</a>
+</footer>
+
+<script>
+(function () {
+  const toc = document.getElementById('toc');
+  const toggleBtn = document.getElementById('btn-toc-toggle');
+  const searchInp = document.getElementById('help-search');
+  const searchMeta = document.getElementById('search-meta');
+  const tocLinks = Array.from(document.querySelectorAll('.toc-list a'));
+  const docEl = document.getElementById('doc-content');
+
+  /* Mobile TOC drawer toggle */
+  if (toggleBtn && toc) {
+    toggleBtn.addEventListener('click', () => {
+      toc.classList.toggle('open');
+    });
+    tocLinks.forEach((a) => {
+      a.addEventListener('click', () => toc.classList.remove('open'));
+    });
+  }
+
+  /* Scroll-spy active TOC highlight */
+  const targets = tocLinks
+    .map((a) => {
+      const id = (a.getAttribute('href') || '').slice(1);
+      const el = id ? document.getElementById(id) : null;
+      return el ? { a, el } : null;
+    })
+    .filter(Boolean);
+
+  function updateActiveToc() {
+    const y = window.scrollY + 95;
+    let cur = targets[0];
+    for (const t of targets) {
+      if (t.el.offsetTop <= y) cur = t;
+    }
+    for (const t of targets) {
+      t.a.classList.toggle('active', cur && t.a === cur.a);
+    }
+  }
+  window.addEventListener('scroll', updateActiveToc, { passive: true });
+  updateActiveToc();
+
+  /* Instant keyword search across sections & table rows */
+  const searchableBlocks = Array.from(
+    docEl.querySelectorAll('.section-card, .section-card tr, .section-card .mini-card, .section-card .steps > li')
+  );
+  const cards = Array.from(docEl.querySelectorAll('.section-card'));
+
+  if (searchInp) {
+    searchInp.addEventListener('input', () => {
+      const q = searchInp.value.trim().toLowerCase();
+      if (!q) {
+        cards.forEach((c) => c.classList.remove('search-hidden'));
+        searchableBlocks.forEach((b) => b.classList.remove('search-hidden'));
+        searchMeta.textContent = '共 6 大章节 · 支持关键词即时定位';
+        return;
+      }
+      let matchedCards = 0;
+      let firstMatch = null;
+      for (const card of cards) {
+        const hit = card.textContent.toLowerCase().includes(q);
+        card.classList.toggle('search-hidden', !hit);
+        if (hit) {
+          matchedCards++;
+          if (!firstMatch) firstMatch = card;
+        }
+      }
+      searchMeta.textContent = matchedCards
+        ? `找到 ${matchedCards} 个包含「${searchInp.value.trim()}」的章节`
+        : `未找到包含「${searchInp.value.trim()}」的内容`;
+      if (firstMatch && window.scrollY > firstMatch.offsetTop + 200) {
+        firstMatch.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
+  }
+})();
+</script>
+</body>
+</html>

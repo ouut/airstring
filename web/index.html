@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="airstring">
 <link rel="manifest" href="./manifest.json">
 <title>airstring · NetHack</title>
-<link rel="stylesheet" href="./airstring.css?v=p2fix10">
+<link rel="stylesheet" href="./airstring.css?v=p2fix11">
 </head>
 <body>
 <header id="topbar">
@@ -22,7 +22,10 @@
     <button id="nav-lobby" type="button" class="nav-tab active">大厅</button>
     <button id="nav-mygames" type="button" class="nav-tab">对局 <span id="nav-my-count" class="nav-badge" hidden>0</span></button>
   </nav>
-  <span id="auth-box"></span>
+  <div class="topbar-right">
+    <span id="auth-box"></span>
+    <a id="nav-help" class="help-menu-btn" href="./help.html" target="_blank" rel="noopener" title="在新页面打开完整帮助文档、快捷键与新手教程">❓ 帮助</a>
+  </div>
 </header>
 
 <!-- ============ Hall screen (大厅: Pure Public Verified Replay Gallery) ============ -->
@@ -182,6 +185,7 @@
       <button id="btn-toggle-touch" type="button" class="icon-btn desktop-only" title="显示/隐藏触控操作栏">⌨</button>
       <button id="btn-fullscreen" type="button" class="icon-btn" title="全屏专注模式">⛶</button>
       <button id="btn-drawer" type="button" class="icon-btn" title="局内菜单">☰</button>
+      <a id="btn-game-help" class="icon-btn help-icon-link" href="./help.html#shortcuts" target="_blank" rel="noopener" title="在新页面打开快捷键与帮助文档">?</a>
     </div>
   </div>
 
