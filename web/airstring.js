@@ -925,7 +925,8 @@ function handleEvent(json) {
         isCursorHoverMsg = true;
         if (S.heroPos) {
           const mode = /travel/i.test(ev.text || '') ? 'travel' : 'farlook';
-          if (!S.cursorPos) {
+          const created = !S.cursorPos;
+          if (created) {
             S.cursorPos = { x: S.heroPos.x, y: S.heroPos.y, mode, desc: '', noPath: false };
           } else {
             S.cursorPos.mode = mode;
@@ -933,6 +934,7 @@ function handleEvent(json) {
           if (!fast) {
             updateCursorHint();
             renderGrid();
+            if (created && mode === 'travel') enqueueCursorBytes([64]);
           }
         }
       } else if (S.cursorPos && ev.text) {
@@ -2012,6 +2014,14 @@ function cursorDeltaForByte(byte) {
 
 function applyCursorByte(byte) {
   if (!S || !S.cursorPos) return;
+  if (byte === 64 && S.heroPos) {
+    S.cursorPos.x = S.heroPos.x;
+    S.cursorPos.y = S.heroPos.y;
+    S.cursorPos.noPath = false;
+    updateCursorHint();
+    renderGrid();
+    return;
+  }
   const d = cursorDeltaForByte(byte);
   if (d) {
     S.cursorPos.x = Math.max(0, Math.min(79, S.cursorPos.x + d[0] * d[2]));
@@ -2141,12 +2151,16 @@ document.addEventListener('keydown', (e) => {
   }
   if (uiMode() === 'main' && (byte === 59 || byte === 95) && S.heroPos) {
     /* Enter client-side cursor tracking immediately on ';' (farlook) or '_' (travel) */
-    S.cursorPos = { x: S.heroPos.x, y: S.heroPos.y, mode: byte === 95 ? 'travel' : 'farlook', desc: '' };
+    S.cursorPos = { x: S.heroPos.x, y: S.heroPos.y, mode: byte === 95 ? 'travel' : 'farlook', desc: '', noPath: false };
     S.cursorQueue = [];
     S.cursorAutoSpaceSent = false;
     updateCursorHint();
     renderGrid();
     renderBar();
+    sendBytes([byte]);
+    /* NetHack remembers previous travel target (u.tx, u.ty); send '@' (64) to snap cursor to hero! */
+    if (byte === 95) enqueueCursorBytes([64]);
+    return;
   }
   sendBytes([byte]);
 });
@@ -2158,9 +2172,11 @@ $('grid').addEventListener('click', (e) => {
   if (!cell) return;
   const x = +cell.dataset.x, y = +cell.dataset.y;
   if (S.cursorPos) {
+    if (S.cursorPos.autoConfirm) return;
     /* Compute virtual cursor position including any pending queued steps */
     let vx = S.cursorPos.x, vy = S.cursorPos.y;
     for (const qb of (S.cursorQueue || [])) {
+      if (qb === 64) { vx = S.heroPos.x; vy = S.heroPos.y; continue; }
       const d = cursorDeltaForByte(qb);
       if (d) {
         vx = Math.max(0, Math.min(79, vx + d[0] * d[2]));
@@ -2199,15 +2215,15 @@ $('grid').addEventListener('click', (e) => {
     showToast(cellCh === ' ' ? '该区域尚未探索，无法直接寻路' : '墙壁不可直接寻路', 1500);
     return;
   }
-  /* Distant tile click -> start '_' travel and step via serialized cursor queue so --More-- never drops steps */
-  S.cursorPos = { x: S.heroPos.x, y: S.heroPos.y, mode: 'travel', desc: '', noPath: false };
+  /* Distant tile click -> start '_' travel, snap to '@' first (erasing stale u.tx/u.ty), then step & confirm */
+  S.cursorPos = { x: S.heroPos.x, y: S.heroPos.y, mode: 'travel', desc: '', noPath: false, autoConfirm: true };
   S.cursorQueue = [];
   S.cursorAutoSpaceSent = false;
   updateCursorHint();
   renderGrid();
   renderBar();
   sendBytes([95]); /* '_' */
-  const steps = [];
+  const steps = [64]; /* '@' snap NetHack cursor to exact hero position before applying dx/dy! */
   let cx = dx, cy = dy;
   while (cx !== 0 || cy !== 0) {
     const sx = Math.sign(cx), sy = Math.sign(cy);
