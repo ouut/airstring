@@ -920,11 +920,13 @@ function handleEvent(json) {
         S.lastPrayTurn = S.lastFrame ? (S.lastFrame.turn || S.lastFrame.moves || 0) : 0;
         if (!fast) updateNotesPrayStatus();
       }
+      let isCursorHoverMsg = false;
       if (/^Pick (an object|a location)|^Where do you want to travel/i.test(ev.text || '')) {
+        isCursorHoverMsg = true;
         if (S.heroPos) {
           const mode = /travel/i.test(ev.text || '') ? 'travel' : 'farlook';
           if (!S.cursorPos) {
-            S.cursorPos = { x: S.heroPos.x, y: S.heroPos.y, mode, desc: '' };
+            S.cursorPos = { x: S.heroPos.x, y: S.heroPos.y, mode, desc: '', noPath: false };
           } else {
             S.cursorPos.mode = mode;
           }
@@ -933,17 +935,29 @@ function handleEvent(json) {
             renderGrid();
           }
         }
-      } else if (S.cursorPos && ev.text && !/^\(For instructions/i.test(ev.text)) {
-        S.cursorPos.desc = String(ev.text).slice(0, 64);
-        if (!fast) updateCursorHint();
+      } else if (S.cursorPos && ev.text) {
+        isCursorHoverMsg = true;
+        if (!/^\(For instructions/i.test(ev.text)) {
+          const prevNoPath = !!S.cursorPos.noPath;
+          S.cursorPos.desc = String(ev.text).slice(0, 64);
+          S.cursorPos.noPath = /\(no travel path\)/i.test(ev.text);
+          if (!fast) {
+            updateCursorHint();
+            if (prevNoPath !== S.cursorPos.noPath) renderGrid();
+          }
+        }
       }
       if (fast) {
-        S.logBuffer.push(ev.text);
-        if (S.logBuffer.length > 200) S.logBuffer.shift();
+        if (!isCursorHoverMsg) {
+          S.logBuffer.push(ev.text);
+          if (S.logBuffer.length > 200) S.logBuffer.shift();
+        }
       } else {
-        renderMessages();
-        appendLog(ev.text);
-        maybeTriggerDangerGuard(ev.text);
+        if (!isCursorHoverMsg) {
+          renderMessages();
+          appendLog(ev.text);
+          maybeTriggerDangerGuard(ev.text);
+        }
       }
       break;
     case 'raw':
@@ -1186,10 +1200,15 @@ function updateCursorHint() {
   if (!el) return;
   if (!S || !S.cursorPos) {
     el.hidden = true;
+    el.classList.remove('no-path');
     el.innerHTML = '';
     return;
   }
-  const tag = S.cursorPos.mode === 'travel' ? '_ 自动寻路' : '; 远视查看';
+  const noPath = !!S.cursorPos.noPath && S.cursorPos.mode === 'travel';
+  el.classList.toggle('no-path', noPath);
+  const tag = S.cursorPos.mode === 'travel'
+    ? (noPath ? '🚫 不可达（无路径）' : '_ 自动寻路')
+    : '; 远视查看';
   const desc = S.cursorPos.desc ? ` · ${S.cursorPos.desc}` : '';
   el.innerHTML = '';
   const txt = document.createElement('span');
@@ -1322,7 +1341,7 @@ function renderGrid() {
       const isCur = S.cursorPos && mapX === S.cursorPos.x && mapY === S.cursorPos.y;
       const isHero = S.heroPos && mapX === S.heroPos.x && mapY === S.heroPos.y;
       const cls = isCur
-        ? 'cursor-cell'
+        ? ((S.cursorPos.noPath && S.cursorPos.mode === 'travel') ? 'cursor-cell no-path' : 'cursor-cell')
         : isHero
           ? 'hero-cell'
           : ('c' + (((colors[mapX] | 0) & 0x1f) % 16));
@@ -2174,8 +2193,14 @@ $('grid').addEventListener('click', (e) => {
     return;
   }
   if (mode === 'dir' || mode === 'dirprompt') return;
+  /* Filter obvious non-walkable targets (unexplored blank space or solid walls) on direct map click */
+  const cellCh = (S.mapRows && S.mapRows[y] && S.mapRows[y][x]) || ' ';
+  if (cellCh === ' ' || cellCh === '-' || cellCh === '|') {
+    showToast(cellCh === ' ' ? '该区域尚未探索，无法直接寻路' : '墙壁不可直接寻路', 1500);
+    return;
+  }
   /* Distant tile click -> start '_' travel and step via serialized cursor queue so --More-- never drops steps */
-  S.cursorPos = { x: S.heroPos.x, y: S.heroPos.y, mode: 'travel', desc: '' };
+  S.cursorPos = { x: S.heroPos.x, y: S.heroPos.y, mode: 'travel', desc: '', noPath: false };
   S.cursorQueue = [];
   S.cursorAutoSpaceSent = false;
   updateCursorHint();

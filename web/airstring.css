@@ -2429,6 +2429,11 @@ button.act.primary .sub { color: #543b02; }
   box-shadow: inset 0 0 0 1.5px #5ce6ff;
   animation: cursorPulse 0.9s ease-in-out infinite alternate;
 }
+#grid span.cursor-cell.no-path {
+  background: rgba(240, 108, 72, 0.34);
+  box-shadow: inset 0 0 0 1.5px #ff7b54;
+  animation: none;
+}
 @keyframes cursorPulse {
   from { background: rgba(79, 214, 214, 0.25); }
   to { background: rgba(79, 214, 214, 0.55); }
@@ -2461,6 +2466,11 @@ button.act.primary .sub { color: #543b02; }
   background: rgba(9, 26, 38, 0.95);
   color: #8eeeff;
   border: 1px solid rgba(92, 230, 255, 0.65);
+}
+.stage-banner.info.no-path {
+  background: rgba(48, 18, 12, 0.96);
+  color: #ffb199;
+  border-color: rgba(255, 123, 84, 0.8);
 }
 .stage-banner.danger {
   top: 8px;
