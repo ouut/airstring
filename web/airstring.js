@@ -921,19 +921,21 @@ function handleEvent(json) {
         if (!fast) updateNotesPrayStatus();
       }
       if (/^Pick (an object|a location)|^Where do you want to travel/i.test(ev.text || '')) {
-        if (!fast && S.heroPos) {
+        if (S.heroPos) {
           const mode = /travel/i.test(ev.text || '') ? 'travel' : 'farlook';
           if (!S.cursorPos) {
             S.cursorPos = { x: S.heroPos.x, y: S.heroPos.y, mode, desc: '' };
           } else {
             S.cursorPos.mode = mode;
           }
-          updateCursorHint();
-          renderGrid();
+          if (!fast) {
+            updateCursorHint();
+            renderGrid();
+          }
         }
-      } else if (!fast && S.cursorPos && ev.text && !/^\(For instructions/i.test(ev.text)) {
+      } else if (S.cursorPos && ev.text && !/^\(For instructions/i.test(ev.text)) {
         S.cursorPos.desc = String(ev.text).slice(0, 64);
-        updateCursorHint();
+        if (!fast) updateCursorHint();
       }
       if (fast) {
         S.logBuffer.push(ev.text);
@@ -1029,10 +1031,26 @@ function handleEvent(json) {
         }
       }
       if (S.moreActive) {
-        if (S.textActive) S.textClosePending = true;
-        S.moreActive = false;
-        S.cursorAutoSpaceSent = false;
-        if (!fast) renderMessages();
+        /* Only Space (32), Enter (13/10), or Esc (27) actually dismisses --More--;
+           other keys trigger bell and leave NetHack waiting at --More--! */
+        const k = ev.code & 0xff;
+        if (k === 32 || k === 13 || k === 10 || k === 27) {
+          if (S.textActive) S.textClosePending = true;
+          S.moreActive = false;
+          S.cursorAutoSpaceSent = false;
+          if (!fast) renderMessages();
+        }
+      } else if (fast && S.cursorPos) {
+        const k = ev.code & 0xff;
+        if (k === 27 || k === 46 || k === 44 || k === 59 || k === 58 || k === 32) {
+          S.cursorPos = null;
+        } else {
+          const d = cursorDeltaForByte(k);
+          if (d) {
+            S.cursorPos.x = Math.max(0, Math.min(79, S.cursorPos.x + d[0] * d[2]));
+            S.cursorPos.y = Math.max(0, Math.min(20, S.cursorPos.y + d[1] * d[2]));
+          }
+        }
       }
       if (S.getretActive) S.getretActive = false;
       if (!fast && S.cursorQueue && S.cursorQueue.length) {
@@ -2102,6 +2120,7 @@ function handleFrame(text) {
   if (!S) return;
   const f = parseFrame(text);
   S.lastFrame = f;
+  if (S.cursorPos) S.cursorPos = null;
   S.records.push({
     k: 'turn', turn: f.turn, frame: f.frame, hash: f.hash,
     keys: bytesToB64(S.pendingKeys),
@@ -2449,7 +2468,13 @@ function finishBuffering(sid) {
   renderGrid();
   renderStatus();
   updateZoomButton();
+  updateCursorHint();
   renderBar();
+
+  if (S.cursorPos && S.moreActive && !S.over && !S.tabLocked && !S.cursorAutoSpaceSent) {
+    S.cursorAutoSpaceSent = true;
+    sendBytes([32]);
+  }
 
   /* Restore any active prompt/menu/text overlay */
   if (S.prompt && S.prompt.kind === 'line') {
