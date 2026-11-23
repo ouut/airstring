@@ -1470,25 +1470,140 @@ function overlayAction(label, fn, primary) {
   $('overlay-actions').appendChild(b);
 }
 
+const MENU_CAT_META = [
+  { re: /^weapons?\b/i, key: 'weapon', icon: '⚔', zh: '武器' },
+  { re: /^armou?r\b/i, key: 'armor', icon: '🛡', zh: '防具' },
+  { re: /^(comestibles?|food)\b/i, key: 'food', icon: '🍖', zh: '食物' },
+  { re: /^potions?\b/i, key: 'potion', icon: '🧪', zh: '药水' },
+  { re: /^scrolls?\b/i, key: 'scroll', icon: '📜', zh: '卷轴' },
+  { re: /^wands?\b/i, key: 'wand', icon: '🪄', zh: '魔杖' },
+  { re: /^rings?\b/i, key: 'ring', icon: '💍', zh: '戒指' },
+  { re: /^amulets?\b/i, key: 'amulet', icon: '📿', zh: '护身符' },
+  { re: /^tools?\b/i, key: 'tool', icon: '🔧', zh: '工具' },
+  { re: /^spellbooks?\b/i, key: 'book', icon: '📖', zh: '魔法书' },
+  { re: /^(gems|stones|gems\/stones)\b/i, key: 'gem', icon: '💎', zh: '宝石/石块' },
+  { re: /^(coins?|gold)\b/i, key: 'coin', icon: '🪙', zh: '金币' },
+  { re: /^venoms?\b/i, key: 'venom', icon: '☠', zh: '毒液' },
+  { re: /^(iron ball|chains?|balls?)\b/i, key: 'chain', icon: '⛓', zh: '铁球/锁链' },
+  { re: /^(spells?|known spells|currently known)/i, key: 'book', icon: '✨', zh: '法术' },
+];
+
+function classifyMenuCategory(text) {
+  const s = String(text || '').trim();
+  for (const m of MENU_CAT_META) {
+    if (m.re.test(s)) return m;
+  }
+  return { key: 'other', icon: '▸', zh: '' };
+}
+
 function itemLine(it) {
   return typeof it.text === 'string' ? it.text : '';
 }
+
 function renderMenu(ev) {
+  const isAny = ev.how === 2 || ev.how === 'PICK_ANY';
+  const isOne = ev.how === 1 || ev.how === 'PICK_ONE';
+  const pages = Math.max(1, Number(ev.pages || 1));
+  const curPage = Math.min(pages, (Number(ev.page || 0) + (ev.page === 0 || ev.page < pages ? 1 : 0)));
   const body = showOverlay(
-    `菜单（${ev.page}/${ev.pages}）` + (ev.how === 'PICK_ANY' ? ' 可多选' :
-      ev.how === 'PICK_ONE' ? ' 选一项' : ''), null, 'menu');
+    `菜单（${curPage}/${pages}）` + (isAny ? ' · 可多选' : isOne ? ' · 选一项' : ''),
+    null, 'menu',
+  );
+
+  let curCat = null;
   for (const it of ev.items || []) {
+    const selCh = it.sel || it.selector || '';
+    const txt = itemLine(it);
+    const isHeader = !selCh && (it.pickable === false || it.attr === 7);
+
+    if (isHeader) {
+      const trimmed = txt.trim();
+      if (!trimmed) {
+        const sp = document.createElement('div');
+        sp.className = 'menu-spacer';
+        body.appendChild(sp);
+        continue;
+      }
+      const cat = classifyMenuCategory(trimmed);
+      curCat = cat.key;
+      const hdr = document.createElement('div');
+      hdr.className = `menu-cat cat-${cat.key}`;
+      const ico = document.createElement('span');
+      ico.className = 'menu-cat-ico';
+      ico.textContent = cat.icon;
+      const title = document.createElement('span');
+      title.className = 'menu-cat-en';
+      title.textContent = trimmed;
+      hdr.append(ico, title);
+      if (cat.zh) {
+        const zh = document.createElement('span');
+        zh.className = 'menu-cat-zh';
+        zh.textContent = cat.zh;
+        hdr.appendChild(zh);
+      }
+      body.appendChild(hdr);
+      continue;
+    }
+
     const b = document.createElement('button');
-    b.type = 'button'; b.className = 'item' + (it.selected ? ' picked' : '');
-    const sel = document.createElement('span');
-    sel.className = 'sel'; sel.textContent = it.selector || '';
-    b.append(sel, document.createTextNode(itemLine(it)));
-    b.addEventListener('click', () => { if (it.selector) sendKey(it.selector); });
+    b.type = 'button';
+    const cls = ['item'];
+    if (curCat) cls.push('cat-' + curCat);
+    if (it.selected) cls.push('picked');
+    const isEquipped = /\(being worn|\(weapon in hand|\(alternate weapon|\(on (left|right) hand|\(wielded/i.test(txt);
+    const isBlessed = /\bblessed\b/i.test(txt);
+    const isCursed = /\bcursed\b/i.test(txt);
+    if (isEquipped) cls.push('st-equipped');
+    if (isBlessed) cls.push('st-blessed');
+    if (isCursed) cls.push('st-cursed');
+    b.className = cls.join(' ');
+
+    if (selCh) {
+      const sel = document.createElement('span');
+      sel.className = 'sel';
+      sel.textContent = it.selected ? `✓ ${selCh}` : selCh;
+      b.appendChild(sel);
+    }
+
+    const label = document.createElement('span');
+    label.className = 'item-txt';
+    label.textContent = txt;
+    b.appendChild(label);
+
+    if (isEquipped || isBlessed || isCursed) {
+      const badges = document.createElement('span');
+      badges.className = 'item-badges';
+      if (isEquipped) {
+        const tg = document.createElement('span');
+        tg.className = 'item-tag tag-eq';
+        tg.textContent = /\(weapon in hand/i.test(txt) ? '持握'
+          : /\(alternate weapon/i.test(txt) ? '副手' : '已装备';
+        badges.appendChild(tg);
+      }
+      if (isBlessed) {
+        const tg = document.createElement('span');
+        tg.className = 'item-tag tag-bless';
+        tg.textContent = '祝福';
+        badges.appendChild(tg);
+      }
+      if (isCursed) {
+        const tg = document.createElement('span');
+        tg.className = 'item-tag tag-curse';
+        tg.textContent = '诅咒';
+        badges.appendChild(tg);
+      }
+      b.appendChild(badges);
+    }
+
+    b.addEventListener('click', () => {
+      if (selCh) sendKey(selCh);
+      else sendKey(' ');
+    });
     body.appendChild(b);
   }
-  overlayAction('翻页（空格）', () => sendKey(' '));
-  if (ev.how === 'PICK_ANY') overlayAction('确认', () => sendBytes([13]), true);
-  overlayAction('关闭/取消（Esc）', () => sendBytes([27]));
+  if (pages > 1) overlayAction('翻页（空格）', () => sendKey(' '));
+  if (isAny) overlayAction('确认（Enter）', () => sendBytes([13]), true);
+  overlayAction('关闭/取消（Esc）', () => sendBytes([27]), !isAny && !isOne);
 }
 function renderText(ev) {
   const lines = (ev.lines || []).map((l) =>
@@ -4180,17 +4295,35 @@ function renderInspectorContent() {
       box.innerHTML = '<div class="hint">背包为空或未能读取背包列表。</div>';
       return;
     }
+    let curCat = null;
     for (const it of items) {
       const txt = String(it.text || '');
       if (!it.sel && !it.pickable) {
+        const trimmed = txt.trim();
+        if (!trimmed) continue;
+        const cat = classifyMenuCategory(trimmed);
+        curCat = cat.key;
         const hdr = document.createElement('div');
-        hdr.className = 'insp-cat';
-        hdr.textContent = txt;
+        hdr.className = `insp-cat menu-cat-styled cat-${cat.key}`;
+        const ico = document.createElement('span');
+        ico.className = 'menu-cat-ico';
+        ico.textContent = cat.icon;
+        const title = document.createElement('span');
+        title.className = 'menu-cat-en';
+        title.textContent = trimmed;
+        hdr.append(ico, title);
+        if (cat.zh) {
+          const zh = document.createElement('span');
+          zh.className = 'menu-cat-zh';
+          zh.textContent = cat.zh;
+          hdr.appendChild(zh);
+        }
         box.appendChild(hdr);
         continue;
       }
       const wrap = document.createElement('div');
       const cls = ['insp-item'];
+      if (curCat) cls.push('cat-' + curCat);
       if (/\(being worn|\(weapon in hand|\(alternate weapon|\(on (left|right) hand|\(wielded/i.test(txt)) cls.push('worn');
       else if (/\bblessed\b/i.test(txt)) cls.push('blessed');
       else if (/\bcursed\b/i.test(txt)) cls.push('cursed');

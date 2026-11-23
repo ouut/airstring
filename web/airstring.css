@@ -617,22 +617,147 @@ body.in-game #foot {
   white-space: pre-wrap;
   color: var(--fg);
 }
+/* Category color tokens shared by in-game menu & replay inspector */
+.cat-weapon { --cat-c: #58c4ff; --cat-bg: rgba(88, 196, 255, 0.13); }
+.cat-armor  { --cat-c: #7ea6ff; --cat-bg: rgba(126, 166, 255, 0.13); }
+.cat-food   { --cat-c: #f0a34b; --cat-bg: rgba(240, 163, 75, 0.13); }
+.cat-potion { --cat-c: #56d984; --cat-bg: rgba(86, 217, 132, 0.13); }
+.cat-scroll { --cat-c: #f2d675; --cat-bg: rgba(242, 214, 117, 0.13); }
+.cat-wand   { --cat-c: #c28bff; --cat-bg: rgba(194, 139, 255, 0.13); }
+.cat-ring   { --cat-c: #ff85b3; --cat-bg: rgba(255, 133, 179, 0.13); }
+.cat-amulet { --cat-c: #ffae57; --cat-bg: rgba(255, 174, 87, 0.14); }
+.cat-tool   { --cat-c: #4dd9c0; --cat-bg: rgba(77, 217, 192, 0.13); }
+.cat-book   { --cat-c: #e879f9; --cat-bg: rgba(232, 121, 249, 0.13); }
+.cat-gem    { --cat-c: #9be8ff; --cat-bg: rgba(155, 232, 255, 0.13); }
+.cat-coin   { --cat-c: #ffd84d; --cat-bg: rgba(255, 216, 77, 0.15); }
+.cat-venom  { --cat-c: #a3e635; --cat-bg: rgba(163, 230, 53, 0.13); }
+.cat-chain  { --cat-c: #f87171; --cat-bg: rgba(248, 113, 113, 0.13); }
+.cat-other  { --cat-c: #e5b54c; --cat-bg: rgba(229, 181, 76, 0.11); }
+
+#overlay-body .menu-spacer {
+  height: 8px;
+}
+#overlay-body .menu-cat,
+.insp-cat.menu-cat-styled {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+  margin-bottom: 4px;
+  padding: 6px 10px;
+  border-radius: 3px;
+  border-left: 3px solid var(--cat-c, var(--accent));
+  background: var(--cat-bg, rgba(229, 181, 76, 0.12));
+  color: var(--cat-c, var(--accent));
+  font-weight: 700;
+  font-size: 12.5px;
+  letter-spacing: 0.02em;
+}
+#overlay-body .menu-cat:first-child,
+.insp-cat.menu-cat-styled:first-child {
+  margin-top: 2px;
+}
+.menu-cat-ico {
+  font-size: 14px;
+  line-height: 1;
+}
+.menu-cat-en {
+  color: var(--cat-c, var(--accent));
+}
+.menu-cat-zh {
+  margin-left: auto;
+  font-family: system-ui, -apple-system, "PingFang SC", sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--cat-c, var(--accent));
+  background: rgba(0, 0, 0, 0.38);
+  color: var(--cat-c, var(--accent));
+}
 #overlay-body .item {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   text-align: left;
-  background: none;
+  background: rgba(16, 20, 28, 0.65);
   border: 0;
-  border-bottom: 1px solid #1b222f;
+  border-left: 3px solid var(--cat-c, #2a3446);
+  border-bottom: 1px solid #18202c;
   color: var(--fg);
-  padding: 8px 6px;
+  padding: 7px 8px 7px 9px;
   font: inherit;
   cursor: pointer;
-  min-height: 40px;
+  min-height: 36px;
 }
-#overlay-body .item:hover, #overlay-body .item:active { background: #1a2333; }
-#overlay-body .item .sel { color: var(--accent); margin-right: 8px; font-weight: 700; }
-#overlay-body .item.picked { background: #223247; }
+#overlay-body .item:hover, #overlay-body .item:active {
+  background: var(--cat-bg, #1a2333);
+  color: var(--fg-bright);
+}
+#overlay-body .item .sel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid var(--cat-c, var(--accent));
+  color: var(--cat-c, var(--accent));
+  font-weight: 700;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+#overlay-body .item .item-txt {
+  flex: 1 1 auto;
+  min-width: 0;
+  word-break: break-word;
+}
+#overlay-body .item.st-equipped .item-txt { color: #f6fbff; font-weight: 600; }
+#overlay-body .item.st-blessed .item-txt { color: #8af09a; }
+#overlay-body .item.st-cursed .item-txt { color: #ff8c8c; }
+#overlay-body .item.picked {
+  background: rgba(88, 166, 255, 0.22);
+  box-shadow: inset 0 0 0 1px rgba(88, 166, 255, 0.5);
+}
+#overlay-body .item-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.item-tag {
+  font-family: system-ui, -apple-system, "PingFang SC", sans-serif;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+.item-tag.tag-eq {
+  background: rgba(229, 181, 76, 0.2);
+  border: 1px solid rgba(229, 181, 76, 0.65);
+  color: #ffd873;
+}
+.item-tag.tag-bless {
+  background: rgba(63, 185, 80, 0.18);
+  border: 1px solid rgba(63, 185, 80, 0.6);
+  color: #7ee787;
+}
+.item-tag.tag-curse {
+  background: rgba(240, 96, 96, 0.22);
+  border: 1px solid rgba(240, 96, 96, 0.7);
+  color: #ff9494;
+}
+.insp-item.cat-weapon, .insp-item.cat-armor, .insp-item.cat-food,
+.insp-item.cat-potion, .insp-item.cat-scroll, .insp-item.cat-wand,
+.insp-item.cat-ring, .insp-item.cat-amulet, .insp-item.cat-tool,
+.insp-item.cat-book, .insp-item.cat-gem, .insp-item.cat-coin,
+.insp-item.cat-venom, .insp-item.cat-chain, .insp-item.cat-other {
+  border-left: 3px solid var(--cat-c, #2a3446) !important;
+  padding-left: 9px !important;
+}
 #overlay-actions {
   display: flex;
   gap: 8px;
