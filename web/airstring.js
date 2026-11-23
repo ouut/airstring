@@ -802,6 +802,7 @@ function uiMode() {
   if (S.prompt && S.prompt.kind === 'yn') return 'yn';
   if (S.menu) return 'menu';
   if (S.textActive) return 'text';
+  if (S.cursorPos) return 'cursor';
   if (S.moreActive) return 'more';
   if (S.getretActive) return 'getret';
   if (S.expectingDir) return 'dir';
@@ -921,14 +922,18 @@ function handleEvent(json) {
       }
       if (/^Pick (an object|a location)|^Where do you want to travel/i.test(ev.text || '')) {
         if (!fast && S.heroPos) {
-          S.cursorPos = {
-            x: S.heroPos.x,
-            y: S.heroPos.y,
-            mode: /travel/i.test(ev.text || '') ? 'travel' : 'farlook',
-          };
+          const mode = /travel/i.test(ev.text || '') ? 'travel' : 'farlook';
+          if (!S.cursorPos) {
+            S.cursorPos = { x: S.heroPos.x, y: S.heroPos.y, mode, desc: '' };
+          } else {
+            S.cursorPos.mode = mode;
+          }
           updateCursorHint();
           renderGrid();
         }
+      } else if (!fast && S.cursorPos && ev.text && !/^\(For instructions/i.test(ev.text)) {
+        S.cursorPos.desc = String(ev.text).slice(0, 64);
+        updateCursorHint();
       }
       if (fast) {
         S.logBuffer.push(ev.text);
@@ -954,6 +959,14 @@ function handleEvent(json) {
       break;
     case 'more':
       S.moreActive = true; S.counters.more++;
+      /* In farlook (;) or travel (_) cursor mode, NetHack's 80-col message line
+         overflows every 1-3 steps with --More--, blocking arrows/./Esc. Feed Space
+         automatically via the normal key queue so cursor navigation never stalls
+         and stays 100% deterministic & verifiable. */
+      if (!fast && S.cursorPos && !S.over && !S.tabLocked && !S.cursorAutoSpaceSent) {
+        S.cursorAutoSpaceSent = true;
+        sendBytes([32]);
+      }
       if (!fast) renderMessages();
       break;
     case 'prompt':
@@ -1018,9 +1031,13 @@ function handleEvent(json) {
       if (S.moreActive) {
         if (S.textActive) S.textClosePending = true;
         S.moreActive = false;
+        S.cursorAutoSpaceSent = false;
         if (!fast) renderMessages();
       }
       if (S.getretActive) S.getretActive = false;
+      if (!fast && S.cursorQueue && S.cursorQueue.length) {
+        scheduleCursorDrain(16);
+      }
       break;
     case 'exit': S.exited = true; break;
   }
@@ -1095,22 +1112,96 @@ function maybeTriggerDangerGuard(text) {
   }, 4500);
 }
 
+let cursorDrainTimer = null;
+
+function scheduleCursorDrain(delayMs = 16) {
+  if (cursorDrainTimer) clearTimeout(cursorDrainTimer);
+  cursorDrainTimer = setTimeout(() => {
+    cursorDrainTimer = null;
+    drainCursorQueue();
+  }, delayMs);
+}
+
+function drainCursorQueue() {
+  if (!S || S.over || S.buffering || S.tabLocked) return;
+  if (!S.cursorQueue || !S.cursorQueue.length) return;
+  if (S.moreActive) {
+    if (!S.cursorAutoSpaceSent) {
+      S.cursorAutoSpaceSent = true;
+      sendBytes([32]);
+    }
+    scheduleCursorDrain(24);
+    return;
+  }
+  const q = globalThis.__airstring_key_queue;
+  if (q && q.pos < q.bytes.length) {
+    scheduleCursorDrain(12);
+    return;
+  }
+  let byte = S.cursorQueue.shift();
+  /* In NetHack 3.6.7 WASM, Enter (13/\r) does NOT confirm ';' or '_' — '.' (46) does! */
+  if (byte === 13) byte = 46;
+  const isExit = byte === 27 || byte === 46 || byte === 44 || byte === 59 || byte === 58 || byte === 32;
+  if (isExit) {
+    /* Clear cursor mode BEFORE sending confirm/cancel so any post-farlook result --More-- stays readable */
+    S.cursorQueue = [];
+    clearCursorPos();
+    sendBytes([byte]);
+    return;
+  }
+  applyCursorByte(byte);
+  sendBytes([byte]);
+  if (S.cursorQueue.length) {
+    scheduleCursorDrain(24);
+  }
+}
+
+function enqueueCursorBytes(bytes) {
+  if (!S || S.over || S.buffering || S.tabLocked) return;
+  if (!S.cursorQueue) S.cursorQueue = [];
+  for (const b of bytes) S.cursorQueue.push(b & 0xff);
+  drainCursorQueue();
+}
+
 function updateCursorHint() {
   const el = $('cursor-hint');
   if (!el) return;
   if (!S || !S.cursorPos) {
     el.hidden = true;
+    el.innerHTML = '';
     return;
   }
-  const tag = S.cursorPos.mode === 'travel' ? '_ 寻路光标' : '; 远看光标';
-  el.textContent = `${tag} (${S.cursorPos.x}, ${S.cursorPos.y}) · 方向键/Shift×8/点击地图移动 · . 确认 · Esc 退出`;
+  const tag = S.cursorPos.mode === 'travel' ? '_ 自动寻路' : '; 远视查看';
+  const desc = S.cursorPos.desc ? ` · ${S.cursorPos.desc}` : '';
+  el.innerHTML = '';
+  const txt = document.createElement('span');
+  txt.textContent = `${tag} (${S.cursorPos.x}, ${S.cursorPos.y})${desc} · 方向键/点地图移准星`;
+  const bOk = document.createElement('button');
+  bOk.type = 'button';
+  bOk.className = 'mini-btn primary-mini';
+  bOk.textContent = '✓ 确认 (Enter/.)';
+  bOk.addEventListener('click', (e) => { e.stopPropagation(); enqueueCursorBytes([46]); });
+  const bEsc = document.createElement('button');
+  bEsc.type = 'button';
+  bEsc.className = 'mini-btn';
+  bEsc.textContent = '✕ 取消 (Esc)';
+  bEsc.addEventListener('click', (e) => { e.stopPropagation(); enqueueCursorBytes([27]); });
+  el.append(txt, bOk, bEsc);
   el.hidden = false;
 }
 
 function clearCursorPos() {
-  if (S) S.cursorPos = null;
+  if (cursorDrainTimer) { clearTimeout(cursorDrainTimer); cursorDrainTimer = null; }
+  if (S) {
+    S.cursorPos = null;
+    S.cursorQueue = [];
+    S.cursorAutoSpaceSent = false;
+  }
   updateCursorHint();
-  if (S && !S.buffering) renderGrid();
+  if (S && !S.buffering) {
+    renderGrid();
+    renderBar();
+  }
 }
 
 /* ---------------- map viewport: full 80x21 + mobile follow-@ zoom ---------------- */
@@ -1496,8 +1587,11 @@ function dirPad(selfLabel) {
     b.addEventListener('click', () => {
       const ch = dirByteForSession(d.dx, d.dy);
       if (ch) {
-        if (S && S.cursorPos) applyCursorByte(ch.charCodeAt(0));
-        sendKey(ch);
+        if (S && S.cursorPos) {
+          enqueueCursorBytes([ch.charCodeAt(0)]);
+        } else {
+          sendKey(ch);
+        }
       }
     });
     pad.appendChild(b);
@@ -1646,6 +1740,12 @@ function renderBar() {
       actBtn('翻页', '空格', () => sendKey(' ')),
       actBtn('关闭菜单', 'Esc', () => sendBytes([27])),
     ];
+  } else if (mode === 'cursor') {
+    padCenter = '确认 .';
+    ctxBtns = [
+      actBtn('✓ 确认', 'Enter / .', () => enqueueCursorBytes([46]), true),
+      actBtn('✕ 取消', 'Esc', () => enqueueCursorBytes([27])),
+    ];
   } else if (mode === 'text' || mode === 'more' || mode === 'getret') {
     ctxBtns = [actBtn('继续', '空格', () => sendKey(' '), true)];
   } else if (mode === 'dir' || mode === 'dirprompt') {
@@ -1754,19 +1854,18 @@ function isMoveByte(byte) {
   return isNumpadSession() ? !!NUM_DELTA[byte] : !!VI_DELTA[byte];
 }
 
+function cursorDeltaForByte(byte) {
+  return isNumpadSession() ? (NUM_DELTA[byte] || null) : (VI_DELTA[byte] || null);
+}
+
 function applyCursorByte(byte) {
   if (!S || !S.cursorPos) return;
-  const d = (isNumpadSession() ? NUM_DELTA[byte] : null) || VI_DELTA[byte];
+  const d = cursorDeltaForByte(byte);
   if (d) {
     S.cursorPos.x = Math.max(0, Math.min(79, S.cursorPos.x + d[0] * d[2]));
     S.cursorPos.y = Math.max(0, Math.min(20, S.cursorPos.y + d[1] * d[2]));
     updateCursorHint();
     renderGrid();
-    return;
-  }
-  /* Confirming or cancelling farlook / travel exits cursor mode */
-  if (byte === 27 || byte === 13 || byte === 46 || byte === 44 || byte === 59 || byte === 58 || byte === 32) {
-    clearCursorPos();
   }
 }
 
@@ -1885,34 +1984,52 @@ document.addEventListener('keydown', (e) => {
 
   e.preventDefault();
   if (S.cursorPos) {
-    applyCursorByte(byte);
-  } else if (uiMode() === 'main' && (byte === 59 || byte === 95) && S.heroPos) {
+    enqueueCursorBytes([byte]);
+    return;
+  }
+  if (uiMode() === 'main' && (byte === 59 || byte === 95) && S.heroPos) {
     /* Enter client-side cursor tracking immediately on ';' (farlook) or '_' (travel) */
-    S.cursorPos = { x: S.heroPos.x, y: S.heroPos.y, mode: byte === 95 ? 'travel' : 'farlook' };
+    S.cursorPos = { x: S.heroPos.x, y: S.heroPos.y, mode: byte === 95 ? 'travel' : 'farlook', desc: '' };
+    S.cursorQueue = [];
+    S.cursorAutoSpaceSent = false;
     updateCursorHint();
     renderGrid();
+    renderBar();
   }
   sendBytes([byte]);
 });
 
-/* map taps: cursor move in farlook/travel, adjacent = move/attack, hero = wait, far = travel */
+/* map taps: cursor move/confirm in farlook/travel, adjacent = move/attack, hero = wait, far = auto-travel */
 $('grid').addEventListener('click', (e) => {
   if (!S || S.over || S.buffering || S.tabLocked || !S.heroPos) return;
   const cell = e.target.closest('span[data-x]');
   if (!cell) return;
   const x = +cell.dataset.x, y = +cell.dataset.y;
   if (S.cursorPos) {
-    let cx = x - S.cursorPos.x, cy = y - S.cursorPos.y;
-    let seq = '';
+    /* Compute virtual cursor position including any pending queued steps */
+    let vx = S.cursorPos.x, vy = S.cursorPos.y;
+    for (const qb of (S.cursorQueue || [])) {
+      const d = cursorDeltaForByte(qb);
+      if (d) {
+        vx = Math.max(0, Math.min(79, vx + d[0] * d[2]));
+        vy = Math.max(0, Math.min(20, vy + d[1] * d[2]));
+      }
+    }
+    if (x === vx && y === vy) {
+      /* Clicking the cell the cyan reticle is already on confirms farlook / travel */
+      enqueueCursorBytes([46]);
+      return;
+    }
+    const steps = [];
+    let cx = x - vx, cy = y - vy;
     while (cx !== 0 || cy !== 0) {
       const sx = Math.sign(cx), sy = Math.sign(cy);
-      seq += dirByteForSession(sx, sy);
+      const ch = dirByteForSession(sx, sy);
+      if (!ch) break;
+      steps.push(ch.charCodeAt(0));
       cx -= sx; cy -= sy;
     }
-    S.cursorPos.x = x; S.cursorPos.y = y;
-    updateCursorHint();
-    renderGrid();
-    if (seq) sendBytes(seq);
+    if (steps.length) enqueueCursorBytes(steps);
     return;
   }
   const dx = x - S.heroPos.x, dy = y - S.heroPos.y;
@@ -1924,14 +2041,25 @@ $('grid').addEventListener('click', (e) => {
     return;
   }
   if (mode === 'dir' || mode === 'dirprompt') return;
-  let seq = '_', cx = dx, cy = dy;
+  /* Distant tile click -> start '_' travel and step via serialized cursor queue so --More-- never drops steps */
+  S.cursorPos = { x: S.heroPos.x, y: S.heroPos.y, mode: 'travel', desc: '' };
+  S.cursorQueue = [];
+  S.cursorAutoSpaceSent = false;
+  updateCursorHint();
+  renderGrid();
+  renderBar();
+  sendBytes([95]); /* '_' */
+  const steps = [];
+  let cx = dx, cy = dy;
   while (cx !== 0 || cy !== 0) {
     const sx = Math.sign(cx), sy = Math.sign(cy);
-    seq += dirByteForSession(sx, sy);
+    const ch = dirByteForSession(sx, sy);
+    if (!ch) break;
+    steps.push(ch.charCodeAt(0));
     cx -= sx; cy -= sy;
   }
-  seq += '.';
-  sendBytes(seq);
+  steps.push(46); /* '.' confirm travel */
+  enqueueCursorBytes(steps);
 });
 
 /* ---------------- streamed frames: status + recorder ---------------- */
